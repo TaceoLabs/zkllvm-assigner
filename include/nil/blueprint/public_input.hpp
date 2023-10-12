@@ -47,11 +47,27 @@ namespace nil {
                 frame(frame), layout_resolver(layout_resolver), memory(memory),
                 assignmnt(assignmnt), public_input_idx(0) {}
 
-            bool parse_scalar(const boost::json::value &value, typename BlueprintFieldType::value_type &out) {
+
+            bool parse_string_scalar(std::string str, typename BlueprintFieldType::value_type &out) {
                 const std::size_t buflen = 256;
                 char buf[buflen];
-                std::size_t numlen = 0;
+                std::size_t numlen = str.size();
+                if (numlen > buflen - 1) {
+                    std::cerr << "value " << str << " exceeds buffer size (" << buflen - 1 << ")\n";
+                    UNREACHABLE("value size exceeds buffer size");
+                }
+                str.copy(buf, numlen);
+                buf[numlen] = '\0';
+                typename BlueprintFieldType::extended_integral_type number(buf);
+                if (number >= BlueprintFieldType::modulus) {
+                    std::cerr << "Input does not fit into BlueprintFieldType" << std::endl;
+                    return false;
+                }
+                out = number;
+                return true;
+            }
 
+            bool parse_scalar(const boost::json::value &value, typename BlueprintFieldType::value_type &out) {
                 switch (value.kind()) {
                 case boost::json::kind::int64:
                     out = value.as_int64();
@@ -60,24 +76,10 @@ namespace nil {
                     out = value.as_uint64();
                     return true;
                 case boost::json::kind::string: {
-                    numlen = value.as_string().size();
-                    if (numlen > buflen - 1) {
-                        std::cerr << "value " << value.as_string() << " exceeds buffer size (" << buflen - 1 << ")\n";
-                        UNREACHABLE("value size exceeds buffer size");
-                    }
-                    value.as_string().copy(buf, numlen);
-                    buf[numlen] = '\0';
-                    typename BlueprintFieldType::extended_integral_type number(buf);
-                    if (number >= BlueprintFieldType::modulus) {
-                        std::cerr << "Input does not fit into BlueprintFieldType" << std::endl;
-                        return false;
-                    }
-                    out = number;
-                    return true;
+                    return parse_string_scalar(std::string(value.as_string().c_str()), out);
                 }
                 default:
                     return false;
-
                 }
             }
 
@@ -200,6 +202,36 @@ namespace nil {
                 } else {
                     frame.vectors[field_arg] = values;
                 }
+                return true;
+            }
+
+            std::vector<var> process_fixedpoint(const boost::json::object &value) {
+                //TODO For now only one single fixed point. Not sure 
+                //how calling convention is for vector...
+                UNREACHABLE("TODO vector fixed point");
+                return {};
+            }
+
+            bool take_fixedpoint(llvm::Value *fixedpoint_arg, llvm::Type *fixedpoint_type, const boost::json::object &value) {
+                if (!fixedpoint_type->isZkFixedPointTy()) {
+                    return false;
+                }
+                if (value.size() != 1 || !value.contains("zk-fixedpoint") || !value.at("zk-fixedpoint").is_string()) {
+                    return false;
+                }
+                boost::json::string str_value = value.at("zk-fixedpoint").as_string();
+                std::size_t comma = str_value.find('.');
+                if (comma == boost::json::string::npos || comma == 0 || comma + 1 == str_value.size()) {
+                    return false;
+                }
+                typename BlueprintFieldType::value_type pre_comma;
+                typename BlueprintFieldType::value_type post_comma;
+                parse_string_scalar(boost::json::string (str_value.subview(0, comma)).c_str(), pre_comma);
+                parse_string_scalar(boost::json::string (str_value.subview(comma + 1, str_value.size())).c_str(), post_comma);
+                llvm::outs() << "I made it :O\n";
+                exit(0);
+                //boost::json::string (value.subview(0, comma).c_str());
+                //boost::json::string (value.subview(comma + 1, value.size()).c_str());
                 return true;
             }
 
@@ -407,6 +439,9 @@ namespace nil {
                             return false;
                     } else if (llvm::isa<llvm::IntegerType>(arg_type)) {
                         if (!take_int(current_arg, current_value))
+                            return false;
+                    } else if (llvm::isa<llvm::ZkFixedPointType>(arg_type)) {
+                        if (!take_fixedpoint(current_arg, arg_type, current_value))
                             return false;
                     }
                     else {
