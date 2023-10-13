@@ -20,7 +20,7 @@ namespace nil {
         namespace detail {
 
             template<typename BlueprintFieldType, typename ArithmetizationParams>
-            typename components::mul_rescale<
+            typename components::fix_mul_rescale<
                 crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>,
                 BlueprintFieldType, basic_non_native_policy<BlueprintFieldType>>::result_type
                 handle_fixedpoint_mul_rescale_component(
