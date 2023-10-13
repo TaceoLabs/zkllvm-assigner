@@ -1103,14 +1103,17 @@ namespace nil {
                     }
                                                  
                     case llvm::Instruction::FAdd: {
-                          llvm::outs()  << "I got fadd uwu\n";
-                          exit(0);
 
-//                       if (inst->getOperand(0)->getType()->isIntegerTy()) {
-//                           handle_integer_addition_component<BlueprintFieldType, ArithmetizationParams>(
-//                                       inst, frame, bp, assignmnt, start_row);
-//                           return inst->getNextNonDebugInstruction();
-//                       }
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+                            llvm::outs()  << "I got fadd with fixed points :)))) uwu\n";
+                            exit(0);
+                           //handle_integer_addition_component<BlueprintFieldType, ArithmetizationParams>(
+                           //            inst, frame, bp, assignmnt, start_row);
+                            return inst->getNextNonDebugInstruction();
+                        } else {
+                            UNREACHABLE("can only fadd with fixed points");
+                        }
 //
 //                       if (inst->getOperand(0)->getType()->isFieldTy() && inst->getOperand(1)->getType()->isFieldTy()) {
 //                           handle_field_addition_component<BlueprintFieldType, ArithmetizationParams>(
