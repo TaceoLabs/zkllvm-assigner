@@ -585,6 +585,7 @@ namespace nil {
 
             const llvm::Instruction *handle_instruction(const llvm::Instruction *inst) {
                 log.log_instruction(inst);
+                llvm::outs() << *inst << "\n";
                 stack_frame<var> &frame = call_stack.top();
                 auto &variables = frame.scalars;
                 std::uint32_t start_row = assignmnt.allocated_rows();
@@ -1100,6 +1101,31 @@ namespace nil {
                         }
                         return extracted_frame.caller->getNextNonDebugInstruction();
                     }
+                                                 
+                    case llvm::Instruction::FAdd: {
+                          llvm::outs()  << "I got fadd uwu\n";
+                          exit(0);
+
+//                       if (inst->getOperand(0)->getType()->isIntegerTy()) {
+//                           handle_integer_addition_component<BlueprintFieldType, ArithmetizationParams>(
+//                                       inst, frame, bp, assignmnt, start_row);
+//                           return inst->getNextNonDebugInstruction();
+//                       }
+//
+//                       if (inst->getOperand(0)->getType()->isFieldTy() && inst->getOperand(1)->getType()->isFieldTy()) {
+//                           handle_field_addition_component<BlueprintFieldType, ArithmetizationParams>(
+//                                       inst, frame, bp, assignmnt, start_row);
+//                           return inst->getNextNonDebugInstruction();
+//                       } else if (inst->getOperand(0)->getType()->isCurveTy() && inst->getOperand(1)->getType()->isCurveTy()) {
+//                           handle_curve_addition_component<BlueprintFieldType, ArithmetizationParams>(
+//                                       inst, frame, bp, assignmnt, start_row);
+//                           return inst->getNextNonDebugInstruction();
+//                       } else {
+//                           UNREACHABLE("curve + scalar is undefined");
+//                       }
+//
+//                       return inst->getNextNonDebugInstruction();
+                   }
 
                     default:
                         UNREACHABLE(std::string("Unsupported opcode type: ") + inst->getOpcodeName());
