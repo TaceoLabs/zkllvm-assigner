@@ -61,6 +61,8 @@
 #include <nil/blueprint/integers/bit_shift.hpp>
 #include <nil/blueprint/integers/bit_de_composition.hpp>
 
+#include <nil/blueprint/fixedpoint/addition.hpp>
+
 #include <nil/blueprint/comparison/comparison.hpp>
 #include <nil/blueprint/bitwise/and.hpp>
 #include <nil/blueprint/bitwise/or.hpp>
@@ -585,7 +587,6 @@ namespace nil {
 
             const llvm::Instruction *handle_instruction(const llvm::Instruction *inst) {
                 log.log_instruction(inst);
-                llvm::outs() << *inst << "\n";
                 stack_frame<var> &frame = call_stack.top();
                 auto &variables = frame.scalars;
                 std::uint32_t start_row = assignmnt.allocated_rows();
@@ -1065,7 +1066,30 @@ namespace nil {
                                             std::cout << unmarshal_field_val(ret_field_type, chopped_field_y) << std::endl;
 
                                         }
-                                    } else {
+                                    } else if (ret_val->getType()->isZkFixedPointTy()) {
+                                        //TODO_TACEO Check if we need to handle other field types or
+                                        //is var_value enough???? I don't think at the moment
+                                        //because we always use var() during parsing but
+                                        //maybe later?
+                                        if (field_arg_num<BlueprintFieldType>(ret_val->getType()) > 1) {
+                                            UNREACHABLE("not possible at the moment (maybe later?)");
+                                        }
+                                        //auto test = var_value(assignmnt, extracted_frame.scalars[ret_val]).data;
+                                        //TACEO_TODO This is copied from Roman's helper
+                                        //TACEO_TODO remove this as soon as we have seperate lib
+                                        typename BlueprintFieldType::value_type P_HALF = BlueprintFieldType::modulus / 2;
+                                        typename BlueprintFieldType::value_type field = var_value(assignmnt, extracted_frame.scalars[ret_val]).data;
+                                        bool is_negative = field > P_HALF;
+                                        if (is_negative) {
+                                            field = -field;
+                                            std::cout << "-";
+                                        }
+                                        //we cannot use llvm::outs here
+                                        std::cout << field << std::endl;
+                                        std::cout << "^_________________________________" << std::endl;
+                                        std::cout << "at the moment you have to divide | this number with 65536 (2^16) to get the result" << std::endl;
+                                    }
+                                    else {
                                         std::cout << var_value(assignmnt, extracted_frame.scalars[ret_val]).data << std::endl;
                                     }
                                 }
@@ -1103,31 +1127,14 @@ namespace nil {
                     }
                                                  
                     case llvm::Instruction::FAdd: {
-
                         if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
                             inst->getOperand(1)->getType()->isZkFixedPointTy()) {
-                            llvm::outs()  << "I got fadd with fixed points :)))) uwu\n";
-                            exit(0);
-                           //handle_integer_addition_component<BlueprintFieldType, ArithmetizationParams>(
-                           //            inst, frame, bp, assignmnt, start_row);
+                            handle_fixedpoint_addition_component<BlueprintFieldType, ArithmetizationParams>(
+                                       inst, frame, bp, assignmnt, start_row);
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
                         }
-//
-//                       if (inst->getOperand(0)->getType()->isFieldTy() && inst->getOperand(1)->getType()->isFieldTy()) {
-//                           handle_field_addition_component<BlueprintFieldType, ArithmetizationParams>(
-//                                       inst, frame, bp, assignmnt, start_row);
-//                           return inst->getNextNonDebugInstruction();
-//                       } else if (inst->getOperand(0)->getType()->isCurveTy() && inst->getOperand(1)->getType()->isCurveTy()) {
-//                           handle_curve_addition_component<BlueprintFieldType, ArithmetizationParams>(
-//                                       inst, frame, bp, assignmnt, start_row);
-//                           return inst->getNextNonDebugInstruction();
-//                       } else {
-//                           UNREACHABLE("curve + scalar is undefined");
-//                       }
-//
-//                       return inst->getNextNonDebugInstruction();
                    }
 
                     default:
@@ -1136,6 +1143,7 @@ namespace nil {
                 return nullptr;
             }
 
+            
         public:
             std::unique_ptr<llvm::Module> parseIRFile(const char *ir_file) {
                 llvm::SMDiagnostic diagnostic;
