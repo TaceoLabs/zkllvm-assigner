@@ -64,6 +64,8 @@
 #include <nil/blueprint/fixedpoint/addition.hpp>
 
 #include <nil/blueprint/comparison/comparison.hpp>
+#include <nil/blueprint/comparison/f_comparison.hpp>
+
 #include <nil/blueprint/bitwise/and.hpp>
 #include <nil/blueprint/bitwise/or.hpp>
 #include <nil/blueprint/bitwise/xor.hpp>
@@ -1135,6 +1137,29 @@ namespace nil {
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
                         }
+                    }
+                    case llvm::Instruction::FCmp: {
+                        auto fcmp_inst = llvm::cast<const llvm::FCmpInst>(inst);
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+                            const var &lhs = variables[inst->getOperand(0)];
+                            const var &rhs = variables[inst->getOperand(1)];
+
+                            auto *lhs_type = llvm::cast<llvm::ZkFixedPointType>(inst->getOperand(0)->getType());
+                            auto *rhs_type = llvm::cast<llvm::ZkFixedPointType>(inst->getOperand(1)->getType());
+                            ASSERT(lhs_type->getBitWidth() == rhs_type->getBitWidth());
+
+                            std::size_t bitness = lhs_type->getBitWidth();
+                            variables[inst] = handle_f_comparison_component<BlueprintFieldType, ArithmetizationParams>(
+                                fcmp_inst->getPredicate(), lhs, rhs, bitness,
+                                bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+
+                            std::cout << "I got: " << var_value(assignmnt, variables[inst] ).data << std::endl;
+                            exit(0);
+                            return inst->getNextNonDebugInstruction();
+                         } else {
+                             UNREACHABLE("can only fcmp with fixed points");
+                         }
                    }
 
                     default:
