@@ -38,7 +38,6 @@
 #include <iostream>
 #include <boost/json/src.hpp>
 
-
 #define DELTA_FIX_1616 (1ULL << 16)
 
 namespace nil {
@@ -225,8 +224,6 @@ namespace nil {
             }
 
             std::vector<var> process_fixedpoint(llvm::ZkFixedPointType *fixedpoint_type, const boost::json::object &value) {
-               //llvm::outs() << fixedpoint_type->getBitWidth() << "\n";
-               //llvm::outs() << fixedpoint_type->getFixedKind() << "\n";
                 ASSERT(value.size() == 1 && value.contains("zk-fixedpoint"));
                 std::vector<var> res;
                 if (!parse_fixedpoint(value.at("zk-fixedpoint"), assignmnt.public_input(0, public_input_idx))) {
@@ -287,11 +284,145 @@ namespace nil {
                 return frame.vectors[vector_arg].size() > 0;
             }
 
+            bool parse_tensor_data(var& data_ptr, const boost::json::array &tensor_arr) {
+                ptr_type ptr = memory.add_cells(std::vector<unsigned>(tensor_arr.size(), 1));
+                assignmnt.public_input(0, public_input_idx) = ptr;
+                data_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+
+                for (size_t i = 0; i < tensor_arr.size(); ++i) {
+                    if (!parse_fixedpoint(tensor_arr[i], assignmnt.public_input(0, public_input_idx))) {
+                        llvm::errs() << "expect fixedpoints in tensor\n";
+                        return false;
+                    }
+                    auto variable = var(0, public_input_idx++, false, var::column_type::public_input);
+                    memory.store(ptr++, variable);
+                }
+                return true;
+            }
+
+            bool parse_dim_array(var& var_dim_ptr, var& var_stride_ptr, const boost::json::array &dim_arr) {
+                if (dim_arr.size() == 0) {
+                    //empty array
+                    return false;
+                }
+                //dimensions 
+                ptr_type dim_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), 1));
+                assignmnt.public_input(0, public_input_idx) = dim_ptr;
+                var_dim_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+                //strides
+                ptr_type stride_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), 1));
+                assignmnt.public_input(0, public_input_idx) = stride_ptr;
+                var_stride_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+                unsigned stride = 1;
+                for (size_t i = 0; i < dim_arr.size(); ++i) {
+                    if (dim_arr[i].kind() != boost::json::kind::int64 || dim_arr[i].as_int64() <= 0) {
+                        llvm::errs() << "expect unsigned ints for tensor dimensions >0\n";
+                        return false;
+                    }
+                    //dimension
+                    assignmnt.public_input(0, public_input_idx) = dim_arr[i].as_int64(); 
+                    memory.store(dim_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+
+                    //stride
+                    stride *= dim_arr[i].as_int64(); 
+                    assignmnt.public_input(0, public_input_idx) = stride; 
+                    memory.store(stride_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+                }
+                return true;
+            }
+
+            bool try_om_tensor(llvm::Value *arg, llvm::Type *arg_type, const boost::json::object &value) {
+                /*
+                 *
+                 *   void *_allocatedPtr; // data buffer
+                     void *_alignedPtr;   // aligned data buffer that the omt indexes.
+
+                     // remove or use _offset. Currently only set to zero, never used. It
+                     // may be in use in LLVM memrefs, so someone needs to look into this.
+                     int64_t _offset;   // offset of 1st element
+                     int64_t *_shape;   // shape array
+                     int64_t *_strides; // strides array
+                     int64_t _rank;     // rank
+
+                     OM_DATA_TYPE _dataType; // ONNX data type
+
+                     int64_t _owning; // indicates whether the Omt owns the memory space
+                     referenced by _allocatedPtr. Omt struct will release the
+                     memory space referred to by _allocatedPtr upon destruction
+                     if and only if it owns it.
+                   */
+                if (!arg_type->isPointerTy()) {
+                    return false;
+                }
+                if (value.size() != 2 || !value.contains("tensor") || !value.contains("dim")) {
+                    return false;
+                }
+                if (!value.at("tensor").is_array() || !value.at("dim").is_array()) {
+                    return false;
+                }
+
+                var data_ptr;
+                if (!parse_tensor_data(data_ptr, value.at("tensor").as_array())) {
+                    return false;
+                }
+                var dim_ptr;
+                var strides_ptr;
+                if (!parse_dim_array(dim_ptr, strides_ptr, value.at("dim").as_array())) {
+                    return false;
+                }
+
+                assignmnt.public_input(0, public_input_idx) = value.at("dim").as_array().size();
+                var tensor_rank = var(0, public_input_idx++, false, var::column_type::public_input);
+                //build the struct:
+                //   void *_allocatedPtr;    -> data
+                //   void *_alignedPtr;      -> TACEO_TODO do we need two pointers?
+                //   int64_t _offset;        -> never used
+                //   int64_t *_shape;        -> shape array
+                //   int64_t *_strides;      -> strides array
+                //   int64_t _rank;          -> rank
+                //   OM_DATA_TYPE _dataType; -> ONNX data type
+                //   int64_t _owning;        -> not used by us
+                ptr_type ptr = memory.add_cells(std::vector<unsigned>(8, 1));
+                memory.store(ptr++, data_ptr);     // _allocatedPtr; 
+                memory.store(ptr++, data_ptr);     // _alignedPtr;   
+                ptr++;                             // _offset not used so leave it be;   
+                memory.store(ptr++, dim_ptr);      // _shape 
+                memory.store(ptr++, strides_ptr);  // _strides 
+                memory.store(ptr++, tensor_rank);  // _rank
+                ptr++;                             // _dataType
+                ptr++;                             // _owning
+                //TACEO_TODO Lets check if we need to store something at the empty places 
+
+                llvm::outs() << "uwu\n";
+                exit(0);
+                //return ptr;
+                //
+               //ptr_type ptr = memory.add_cells(std::vector<unsigned>(json_str.size() + 1, 1));
+               //assignmnt.public_input(0, public_input_idx) = ptr;
+               //auto pointer_var = var(0, public_input_idx++, false, var::column_type::public_input);
+               //frame.scalars[arg] = pointer_var;
+
+               //for (char c : json_str) {
+               //    assignmnt.public_input(0, public_input_idx) = c;
+               //    auto variable = var(0, public_input_idx++, false, var::column_type::public_input);
+               //    memory.store(ptr++, variable);
+               //}
+
+                //first read the data
+               //llvm::outs() << "lets see\n";
+               ////for the struct we need 
+               ////
+               //ptr_type ptr = memory.add_cells(std::vector<unsigned>(12, 1));
+               //llvm::outs() << "I am here :D\n";
+                exit(0);
+                return true;
+            }
+
             bool try_string(llvm::Value *arg, llvm::Type *arg_type, const boost::json::object &value) {
                 if (!arg_type->isPointerTy()) {
                     return false;
                 }
-                if (value.size() != 1 && !value.contains("string")) {
+                if (value.size() != 1 || !value.contains("string")) {
                     return false;
                 }
                 if (!value.at("string").is_string()) {
@@ -449,7 +580,7 @@ namespace nil {
                                 UNREACHABLE("unsupported pointer type");
                             }
                         }
-                        if (!try_string(current_arg, arg_type, current_value)) {
+                        if (!try_string(current_arg, arg_type, current_value) && !try_om_tensor(current_arg, arg_type, current_value)) {
                             std::cerr << "Unhandled pointer argument" << std::endl;
                             return false;
                         }
