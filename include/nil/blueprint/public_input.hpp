@@ -331,38 +331,16 @@ namespace nil {
                 return true;
             }
 
-            bool try_om_tensor(llvm::Value *arg, llvm::Type *arg_type, const boost::json::object &value) {
-                /*
-                 *
-                 *   void *_allocatedPtr; // data buffer
-                     void *_alignedPtr;   // aligned data buffer that the omt indexes.
-
-                     // remove or use _offset. Currently only set to zero, never used. It
-                     // may be in use in LLVM memrefs, so someone needs to look into this.
-                     int64_t _offset;   // offset of 1st element
-                     int64_t *_shape;   // shape array
-                     int64_t *_strides; // strides array
-                     int64_t _rank;     // rank
-
-                     OM_DATA_TYPE _dataType; // ONNX data type
-
-                     int64_t _owning; // indicates whether the Omt owns the memory space
-                     referenced by _allocatedPtr. Omt struct will release the
-                     memory space referred to by _allocatedPtr upon destruction
-                     if and only if it owns it.
-                   */
-                if (!arg_type->isPointerTy()) {
+            bool try_om_tensor(var& om_tensor_ptr, const boost::json::object &value) {
+                if (value.size() != 2 || !value.contains("data") || !value.contains("dim")) {
                     return false;
                 }
-                if (value.size() != 2 || !value.contains("tensor") || !value.contains("dim")) {
-                    return false;
-                }
-                if (!value.at("tensor").is_array() || !value.at("dim").is_array()) {
+                if (!value.at("data").is_array() || !value.at("dim").is_array()) {
                     return false;
                 }
 
                 var data_ptr;
-                if (!parse_tensor_data(data_ptr, value.at("tensor").as_array())) {
+                if (!parse_tensor_data(data_ptr, value.at("data").as_array())) {
                     return false;
                 }
                 var dim_ptr;
@@ -383,6 +361,10 @@ namespace nil {
                 //   OM_DATA_TYPE _dataType; -> ONNX data type
                 //   int64_t _owning;        -> not used by us
                 ptr_type ptr = memory.add_cells(std::vector<unsigned>(8, 1));
+                assignmnt.public_input(0, public_input_idx) = ptr;
+                om_tensor_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+
+                //TACEO_TODO Lets check if we need to store something at the empty places 
                 memory.store(ptr++, data_ptr);     // _allocatedPtr; 
                 memory.store(ptr++, data_ptr);     // _alignedPtr;   
                 ptr++;                             // _offset not used so leave it be;   
@@ -391,30 +373,47 @@ namespace nil {
                 memory.store(ptr++, tensor_rank);  // _rank
                 ptr++;                             // _dataType
                 ptr++;                             // _owning
-                //TACEO_TODO Lets check if we need to store something at the empty places 
+                return true;
+            }
 
-                llvm::outs() << "uwu\n";
-                exit(0);
-                //return ptr;
-                //
-               //ptr_type ptr = memory.add_cells(std::vector<unsigned>(json_str.size() + 1, 1));
-               //assignmnt.public_input(0, public_input_idx) = ptr;
-               //auto pointer_var = var(0, public_input_idx++, false, var::column_type::public_input);
-               //frame.scalars[arg] = pointer_var;
+            bool try_om_tensor_list(llvm::Value *arg, llvm::Type *arg_type, const boost::json::object &value) {
+                if (!arg_type->isPointerTy()) {
+                    return false;
+                }
+                if (!value.contains("tensor_list") || !value.at("tensor_list").is_array()) {
+                    return false;
+                }
+                // build the struct:
+                //   OMTensor **_omts; // OMTensor array
+                //   int64_t _size;    // Number of elements in _omts.
+                //   int64_t _owning;  // not used by us
+                ptr_type om_tensor_list_ptr = memory.add_cells(std::vector<unsigned>(3, 1));
+                assignmnt.public_input(0, public_input_idx) = om_tensor_list_ptr;
+                frame.scalars[arg] = var(0, public_input_idx++, false, var::column_type::public_input);
 
-               //for (char c : json_str) {
-               //    assignmnt.public_input(0, public_input_idx) = c;
-               //    auto variable = var(0, public_input_idx++, false, var::column_type::public_input);
-               //    memory.store(ptr++, variable);
-               //}
+                auto json_arr = value.at("tensor_list").as_array();
+                //store pointer to tensor list (_omts)
+                ptr_type _omts_ptr = memory.add_cells(std::vector<unsigned>(json_arr.size(), 1));
+                assignmnt.public_input(0, public_input_idx) = _omts_ptr;
+                memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
 
-                //first read the data
-               //llvm::outs() << "lets see\n";
-               ////for the struct we need 
-               ////
-               //ptr_type ptr = memory.add_cells(std::vector<unsigned>(12, 1));
-               //llvm::outs() << "I am here :D\n";
-                exit(0);
+                //store _size
+                assignmnt.public_input(0, public_input_idx) = json_arr.size();
+                memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+
+                //parse the tensors
+                for (auto t: json_arr) {
+                    if (t.kind() != boost::json::kind::object) {
+                        return false;
+                    }
+                    var current_tensor;
+                    if (!try_om_tensor(current_tensor, t.as_object())) {
+                        return false;
+                    }
+                    memory.store(_omts_ptr++, current_tensor);
+                }
+                //owning nothing to do for use
+                om_tensor_list_ptr++;
                 return true;
             }
 
@@ -580,7 +579,7 @@ namespace nil {
                                 UNREACHABLE("unsupported pointer type");
                             }
                         }
-                        if (!try_string(current_arg, arg_type, current_value) && !try_om_tensor(current_arg, arg_type, current_value)) {
+                        if (!try_string(current_arg, arg_type, current_value) && !try_om_tensor_list(current_arg, arg_type, current_value)) {
                             std::cerr << "Unhandled pointer argument" << std::endl;
                             return false;
                         }
