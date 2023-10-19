@@ -294,8 +294,8 @@ namespace nil {
                         llvm::errs() << "expect fixedpoints in tensor\n";
                         return false;
                     }
-                    auto variable = var(0, public_input_idx++, false, var::column_type::public_input);
-                    memory.store(ptr++, variable);
+                    //std::cout << "data[" << ptr << "] <- " << tensor_arr[i] << std::endl;
+                    memory.store(ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
                 }
                 return true;
             }
@@ -320,11 +320,13 @@ namespace nil {
                         return false;
                     }
                     //dimension
+                    std::cout << "storing " << dim_ptr << "<- "<< dim_arr[i].as_int64() << "\n";
                     assignmnt.public_input(0, public_input_idx) = dim_arr[i].as_int64(); 
                     memory.store(dim_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
 
-                    //stride
+                    //stride //WE MAYBE NEED TO SWAP THIS!
                     stride *= dim_arr[i].as_int64(); 
+                    std::cout << "storing " << stride_ptr << "<- "<< stride << "\n";
                     assignmnt.public_input(0, public_input_idx) = stride; 
                     memory.store(stride_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
                 }
@@ -351,6 +353,10 @@ namespace nil {
 
                 assignmnt.public_input(0, public_input_idx) = value.at("dim").as_array().size();
                 var tensor_rank = var(0, public_input_idx++, false, var::column_type::public_input);
+
+                //hardcoded to one for the moment (float)
+                assignmnt.public_input(0, public_input_idx) = 1;
+                var data_type = var(0, public_input_idx++, false, var::column_type::public_input);
                 //build the struct:
                 //   void *_allocatedPtr;    -> data
                 //   void *_alignedPtr;      -> TACEO_TODO do we need two pointers?
@@ -365,14 +371,25 @@ namespace nil {
                 om_tensor_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
 
                 //TACEO_TODO Lets check if we need to store something at the empty places 
+                std::cout << "===========================================" << std::endl;
+                std::cout << "storing allocated " << ptr << "<-" << var_value(assignmnt, data_ptr).data << "\n";
                 memory.store(ptr++, data_ptr);     // _allocatedPtr; 
+                std::cout << "storing aligned ptr to " << ptr << "<-" << var_value(assignmnt, data_ptr).data<< "\n";
                 memory.store(ptr++, data_ptr);     // _alignedPtr;   
+                std::cout << "storing offset to " << ptr << "<- NULL\n";
                 ptr++;                             // _offset not used so leave it be;   
+                std::cout << "storing shape ptr to " << ptr << "<-" <<  var_value(assignmnt, dim_ptr).data<< "\n";
                 memory.store(ptr++, dim_ptr);      // _shape 
+                std::cout << "storing strides ptr to " << ptr << "<-" << var_value(assignmnt, strides_ptr).data<< "\n";
                 memory.store(ptr++, strides_ptr);  // _strides 
+                std::cout << "storing rank ptr to " << ptr << "<-" << var_value(assignmnt, tensor_rank).data<< "\n";
                 memory.store(ptr++, tensor_rank);  // _rank
-                ptr++;                             // _dataType
+                std::cout << "storing data type ptr to " << "<-NULL\n";
+                memory.store(ptr++, data_type);  // _dataType
+                std::cout << "storing owning ptr to " << "<-NULL\n";
                 ptr++;                             // _owning
+                std::cout << "===========================================" << std::endl;
+                
                 return true;
             }
 
@@ -390,13 +407,14 @@ namespace nil {
                 ptr_type om_tensor_list_ptr = memory.add_cells(std::vector<unsigned>(3, 1));
                 assignmnt.public_input(0, public_input_idx) = om_tensor_list_ptr;
                 frame.scalars[arg] = var(0, public_input_idx++, false, var::column_type::public_input);
+                llvm::outs() << "om_tensor_list_ptr: " << om_tensor_list_ptr << "\n";
 
                 auto json_arr = value.at("tensor_list").as_array();
                 //store pointer to tensor list (_omts)
                 ptr_type _omts_ptr = memory.add_cells(std::vector<unsigned>(json_arr.size(), 1));
                 assignmnt.public_input(0, public_input_idx) = _omts_ptr;
                 memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
-
+                llvm::outs() << "omts ptr: " << _omts_ptr << "\n";
                 //store _size
                 assignmnt.public_input(0, public_input_idx) = json_arr.size();
                 memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
@@ -410,6 +428,8 @@ namespace nil {
                     if (!try_om_tensor(current_tensor, t.as_object())) {
                         return false;
                     }
+                   //llvm::outs() << "Storing to "<< _omts_ptr << "<-";
+                   //std::cout << var_value(assignmnt, current_tensor).data << std::endl;
                     memory.store(_omts_ptr++, current_tensor);
                 }
                 //owning nothing to do for use
@@ -432,6 +452,7 @@ namespace nil {
                 assignmnt.public_input(0, public_input_idx) = ptr;
                 auto pointer_var = var(0, public_input_idx++, false, var::column_type::public_input);
                 frame.scalars[arg] = pointer_var;
+                llvm::outs() << "element of *om_tensor_list" << ptr << "\n";
 
                 for (char c : json_str) {
                     assignmnt.public_input(0, public_input_idx) = c;

@@ -124,13 +124,16 @@ namespace nil {
             template <typename BlueprintFieldType, typename Array>
             int get_flat_index(llvm::Type *type, const Array &gep_indices) {
                 ASSERT(type->isAggregateType());
-                if (type_cache.find(type) == type_cache.end())
+                if (type_cache.find(type) == type_cache.end()) {
                     resolve_type<BlueprintFieldType>(type);
+                }
                 auto *type_record = &type_cache[type];
+                unsigned offset = 0;
                 for (unsigned i = 0; i < gep_indices.size() - 1; ++i) {
+                    offset += type_record->indices[gep_indices[i]].idx;
                     type_record = &type_cache[type_record->indices[gep_indices[i]].type];
                 }
-                return type_record->indices[gep_indices.back()].idx;
+                return offset + type_record->indices[gep_indices.back()].idx;
             }
 
             unsigned get_type_size(llvm::Type *type) {
@@ -143,6 +146,7 @@ namespace nil {
                 switch (type->getTypeID()) {
                 case llvm::Type::IntegerTyID:
                 case llvm::Type::PointerTyID:
+                case llvm::Type::ZkFixedPointTyID:
                     return {get_type_size(type)};
                 case llvm::Type::GaloisFieldTyID: {
                     std::vector<unsigned> res;
