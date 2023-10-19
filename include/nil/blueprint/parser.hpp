@@ -363,7 +363,7 @@ namespace nil {
                         auto ptr = stack_memory.malloc(bytes);
                         std::cout << "i allocated at " << ptr << " this many bytes "<< bytes<< std::endl;
                         std::cout << "there is: " << var_value(assignmnt, stack_memory.load(ptr)).data << std::endl;
-                        assignmnt.public_input(0, public_input_idx) = bytes;
+                        assignmnt.public_input(0, public_input_idx) = ptr;
                         frame.scalars[inst] = var(0, public_input_idx++, false, var::column_type::public_input);
                         return true;
                     }
@@ -472,6 +472,7 @@ namespace nil {
                 //This most likely is not 100% correct but it is better than before
                 if (num_cells == 1) {
                     stack_memory[dst_ptr].v = frame.scalars[val];
+                    std::cout << "single store " << var_value(assignmnt, stack_memory[dst_ptr].v).data << "->" << dst_ptr << std::endl;
                 } else {
                     ptr_type src_ptr = resolve_number<ptr_type>(frame.scalars[val]);
                     for (size_t i = 0;i<num_cells;++i) {
@@ -1100,10 +1101,14 @@ namespace nil {
                                         std::cout << _omts << "<- _omts\n" << std::endl;
                                         std::cout << size << "<- size\n" << std::endl;
                                         for (unsigned i=0;i<size;++i) {
-                                            //get pointer to tensor data
-                                            ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_omts + (i * 8)));
+                                            //get pointer to tensor struct 
+                                            ptr_type _struct_ptr = resolve_number<ptr_type>(stack_memory.load(_omts + (i * 8)));
+                                        std::cout << _struct_ptr << "<- struct_ptr\n" << std::endl;
                                             //TACEO_TODO for now only iterate over 10 -> we need to iterate over data size which is
                                             //dim.reduce(|a,b| a + b)
+                                            // get pointer to tensor data
+                                            ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr));
+                                        std::cout << _data_ptr << "<- data_ptr\n" << std::endl;
                                             std::cout << "[";
                                             for (unsigned j=0;j<50;++j) {
                                                 std::cout << var_value(assignmnt, stack_memory.load(_data_ptr + j)).data << ", ";
