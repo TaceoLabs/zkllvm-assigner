@@ -32,16 +32,17 @@ namespace nil {
                         &assignment,
                     std::uint32_t start_row) {
 
+                // TACEO_TODO FixedPointManifestReader is super hacky! we do not want that
                 using var = crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
 
-                using component_type = components::mul_rescale<
+                using component_type = components::fix_mul_rescale<
                     crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>,
                     BlueprintFieldType, basic_non_native_policy<BlueprintFieldType>>;
                 const auto p = PolicyManager::get_parameters(
-                    ManifestReader<component_type, ArithmetizationParams>::get_witness(0));
+                    FixedPointManifestReader<component_type, ArithmetizationParams,1,1>::get_witness(0));
                 component_type component_instance(
-                    p.witness, ManifestReader<component_type, ArithmetizationParams>::get_constants(),
-                    ManifestReader<component_type, ArithmetizationParams>::get_public_inputs(), 1);
+                    p.witness, FixedPointManifestReader<component_type, ArithmetizationParams,1,1>::get_constants(),
+                    FixedPointManifestReader<component_type, ArithmetizationParams,1,1>::get_public_inputs(), 1);
 
                 // TACEO_TODO in the previous line I hardcoded 1 for now!!! CHANGE THAT
                 // TACEO_TODO make an assert that both have the same scale?
@@ -53,7 +54,29 @@ namespace nil {
                 components::generate_circuit(component_instance, bp, assignment, {x, y}, start_row);
                 return components::generate_assignments(component_instance, assignment, {x, y}, start_row);
             }
+
         }    // namespace detail
+        template<typename BlueprintFieldType, typename ArithmetizationParams>
+        void handle_fixedpoint_mul_rescale_component(
+            const llvm::Instruction *inst,
+            stack_frame<crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>> &frame,
+            circuit<crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>> &bp,
+            assignment<crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>>
+                &assignment,
+            std::uint32_t start_row) {
+                llvm::Value *operand0 = inst->getOperand(0);
+                llvm::Value *operand1 = inst->getOperand(1);
+
+                llvm::Type *op0_type = operand0->getType();
+                llvm::Type *op1_type = operand1->getType();
+                ASSERT(llvm::isa<llvm::ZkFixedPointType>(op0_type) &&
+                       llvm::isa<llvm::ZkFixedPointType>(op1_type));
+                frame.scalars[inst] = detail::handle_fixedpoint_mul_rescale_component<BlueprintFieldType, ArithmetizationParams>(operand0, operand1, frame.scalars, bp, assignment, start_row).output;
+
+                //TACEO_TODO check Scale size here in LLVM???
+               //ASSERT(llvm::cast<llvm::GaloisFieldType>(op0_type)->getFieldKind() ==
+               //       llvm::cast<llvm::GaloisFieldType>(op1_type)->getFieldKind());
+        }
     }        // namespace blueprint
 }    // namespace nil
 

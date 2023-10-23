@@ -63,6 +63,8 @@
 #include <nil/blueprint/integers/bit_de_composition.hpp>
 
 #include <nil/blueprint/fixedpoint/addition.hpp>
+#include <nil/blueprint/fixedpoint/mul_rescale.hpp>
+#include <nil/blueprint/fixedpoint/subtraction.hpp>
 
 #include <nil/blueprint/comparison/comparison.hpp>
 #include <nil/blueprint/comparison/f_comparison.hpp>
@@ -1110,7 +1112,7 @@ namespace nil {
                                             ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr));
                                         std::cout << _data_ptr << "<- data_ptr\n" << std::endl;
                                             std::cout << "[";
-                                            for (unsigned j=0;j<50;++j) {
+                                            for (unsigned j=0;j<10;++j) {
                                                 std::cout << var_value(assignmnt, stack_memory.load(_data_ptr + j)).data << ", ";
                                             }
                                             std::cout << "]" << std::endl;
@@ -1227,6 +1229,30 @@ namespace nil {
                             handle_fixedpoint_addition_component<BlueprintFieldType, ArithmetizationParams>(
                                        inst, frame, bp, assignmnt, start_row);
                             std::cout << "fadd result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
+                            return inst->getNextNonDebugInstruction();
+                        } else {
+                            UNREACHABLE("can only fadd with fixed points");
+                        }
+                    }
+                    case llvm::Instruction::FSub: {
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+
+                            handle_fixedpoint_subtraction_component<BlueprintFieldType, ArithmetizationParams>(
+                                       inst, frame, bp, assignmnt, start_row);
+                            std::cout << "fsub result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
+                            return inst->getNextNonDebugInstruction();
+                        } else {
+                            UNREACHABLE("can only fadd with fixed points");
+                        }
+                    }
+                    case llvm::Instruction::FMul: {
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+
+                           handle_fixedpoint_mul_rescale_component<BlueprintFieldType, ArithmetizationParams>(
+                                      inst, frame, bp, assignmnt, start_row);
+                           std::cout << "fmul result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");

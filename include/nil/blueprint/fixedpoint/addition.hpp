@@ -8,7 +8,6 @@
 
 #include <nil/crypto3/zk/snark/arithmetization/plonk/constraint_system.hpp>
 
-#include <nil/blueprint/basic_non_native_policy.hpp>
 #include <nil/blueprint/fields/addition.hpp>
 
 #include <nil/blueprint/asserts.hpp>
@@ -26,10 +25,12 @@ namespace nil {
                 &assignment,
             std::uint32_t start_row) {
 
-            using non_native_policy_type = basic_non_native_policy<BlueprintFieldType>;
-
             llvm::Value *operand0 = inst->getOperand(0);
             llvm::Value *operand1 = inst->getOperand(1);
+            llvm::Type *op0_type = operand0->getType();
+            llvm::Type *op1_type = operand1->getType();
+            ASSERT(llvm::isa<llvm::ZkFixedPointType>(op0_type) &&
+                   llvm::isa<llvm::ZkFixedPointType>(op1_type));
 
             // TACEO_TODO make an assert that both have the same scale?
             // TACEO_TODO we probably have to extract the field element from the type here
