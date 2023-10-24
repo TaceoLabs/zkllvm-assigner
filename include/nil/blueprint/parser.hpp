@@ -58,8 +58,8 @@
 
 #include <nil/blueprint/logger.hpp>
 #include <nil/blueprint/layout_resolver.hpp>
-#include <nil/blueprint/public_input.hpp>
 #include <nil/blueprint/onnx/runtime.hpp>
+#include <nil/blueprint/input_reader.hpp>
 #include <nil/blueprint/non_native_marshalling.hpp>
 #include <nil/blueprint/stack.hpp>
 #include <nil/blueprint/integers/addition.hpp>
@@ -129,10 +129,45 @@ namespace nil {
                 const var &lhs = variables[inst->getOperand(0)];
                 const var &rhs = variables[inst->getOperand(1)];
 
-                std::size_t bitness = inst->getOperand(0)->getType()->getPrimitiveSizeInBits();
-                variables[inst] = handle_comparison_component<BlueprintFieldType, ArithmetizationParams>(
-                    inst->getPredicate(), lhs, rhs, bitness,
-                    bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+                llvm::CmpInst::Predicate p = inst->getPredicate();
+
+                if (p == llvm::CmpInst::ICMP_EQ || p ==llvm::CmpInst::ICMP_NE) {
+                    std::size_t bitness = inst->getOperand(0)->getType()->getPrimitiveSizeInBits();
+                    variables[inst] = handle_comparison_component<BlueprintFieldType, ArithmetizationParams>(
+                        p, lhs, rhs, bitness,
+                        bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+                } else {
+                    bool res;
+
+                    switch (p) {
+                    case llvm::CmpInst::ICMP_SGE:
+                    case llvm::CmpInst::ICMP_UGE:{
+                        res = (var_value(assignmnt, lhs) >= var_value(assignmnt, rhs));
+                        break;
+                    }
+                    case llvm::CmpInst::ICMP_SGT:
+                    case llvm::CmpInst::ICMP_UGT:{
+                        res = (var_value(assignmnt, lhs) > var_value(assignmnt, rhs));
+                        break;
+                    }
+                    case llvm::CmpInst::ICMP_SLE:
+                    case llvm::CmpInst::ICMP_ULE:{
+                        res = (var_value(assignmnt, lhs) <= var_value(assignmnt, rhs));
+                        break;
+                    }
+                    case llvm::CmpInst::ICMP_SLT:
+                    case llvm::CmpInst::ICMP_ULT:{
+                        res = (var_value(assignmnt, lhs) < var_value(assignmnt, rhs));
+                        break;
+                    }
+                    default:
+                        UNREACHABLE("Unsupported icmp predicate");
+                        break;
+                    }
+                    variables[inst] = put_into_assignment(res);
+
+                }
+
             }
 
             void handle_vector_cmp(const llvm::ICmpInst *inst, stack_frame<var> &frame) {
@@ -204,8 +239,7 @@ namespace nil {
                         UNREACHABLE("Unsupported predicate");
                         break;
                 }
-                assignmnt.public_input(0, public_input_idx) = res;
-                frame.scalars[inst] = var(0, public_input_idx++, false, var::column_type::public_input);
+                frame.scalars[inst] = put_into_assignment(res);
             }
 
             template<typename FieldType>
@@ -342,8 +376,7 @@ namespace nil {
                     if (!type->isAggregateType() && !type->isVectorTy()) {
                         std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = marshal_field_val(constant);
                         for (int i = 0; i < marshalled_field_val.size(); i++) {
-                            assignmnt.public_input(0, public_input_idx) = marshalled_field_val[i];
-                            auto variable = var(0, public_input_idx++, false, var::column_type::public_input);
+                            auto variable = put_into_assignment(marshalled_field_val[i]);
                             stack_memory.store(ptr++, variable);
                         }
                         continue;
@@ -380,8 +413,7 @@ namespace nil {
                 switch (id) {
                     case llvm::Intrinsic::assigner_malloc: {
                         size_t bytes = resolve_number<size_t>(frame, inst->getOperand(0));
-                        assignmnt.public_input(0, public_input_idx) = stack_memory.malloc(bytes);
-                        frame.scalars[inst] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        frame.scalars[inst] = put_into_assignment(stack_memory.malloc(bytes));
                         return true;
                     }
                     case llvm::Intrinsic::assigner_free: {
@@ -569,22 +601,19 @@ namespace nil {
                 ptr_type ptr = resolve_number<ptr_type>(frame, operand);
                 size_t offset = stack_memory.ptrtoint(ptr);
                 log.debug("PtrToInt {} {}", ptr, offset);
-                assignmnt.public_input(0, public_input_idx) = offset;
-                frame.scalars[inst] = var(0, public_input_idx++, false, var::column_type::public_input);
+                frame.scalars[inst] = put_into_assignment(offset);
             }
 
             void put_constant(llvm::Constant *c, stack_frame<var> &frame) {
                 if (llvm::isa<llvm::ConstantField>(c) || llvm::isa<llvm::ConstantInt>(c)) {
                     std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = marshal_field_val(c);
                     if (marshalled_field_val.size() == 1) {
-                        assignmnt.public_input(0, public_input_idx) = marshalled_field_val[0];
-                        frame.scalars[c] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        frame.scalars[c] = put_into_assignment(marshalled_field_val[0]);
                     }
                     else {
                         frame.vectors[c] = {};
                         for (std::size_t i = 0; i < marshalled_field_val.size(); i++) {
-                            assignmnt.public_input(0, public_input_idx) = marshalled_field_val[i];
-                            frame.vectors[c].push_back(var(0, public_input_idx++, false, var::column_type::public_input));
+                            frame.vectors[c].push_back(put_into_assignment(marshalled_field_val[i]));
                         }
                     }
                 } else if (llvm::isa<llvm::UndefValue>(c)) {
@@ -601,8 +630,7 @@ namespace nil {
                         for (size_t i = 0; i < layout.size(); ++i) {
                             stack_memory.store(ptr+i, undef_var);
                         }
-                        assignmnt.public_input(0, public_input_idx) = ptr;
-                        frame.scalars[c] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        frame.scalars[c] = put_into_assignment(ptr);
                     }
                 } else if (llvm::isa<llvm::ConstantPointerNull>(c)) {
                     frame.scalars[c] = zero_var;
@@ -619,8 +647,7 @@ namespace nil {
                             continue;
                         std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = marshal_field_val(elem);
                         for (std::size_t j = 0; j < marshalled_field_val.size(); j++) {
-                            assignmnt.public_input(0, public_input_idx) = marshalled_field_val[j];
-                            result_vector[i * arg_num + j] = var(0, public_input_idx++, false, var::column_type::public_input);
+                            result_vector[i * arg_num + j] = put_into_assignment(marshalled_field_val[j]);
                         }
 
                     }
@@ -653,6 +680,7 @@ namespace nil {
 
             const llvm::Instruction *handle_instruction(const llvm::Instruction *inst) {
                 log.log_instruction(inst);
+                llvm::outs() << *inst << "\n";
                 stack_frame<var> &frame = call_stack.top();
                 auto &variables = frame.scalars;
                 std::uint32_t start_row = assignmnt.allocated_rows();
@@ -888,9 +916,12 @@ namespace nil {
                         const var &lhs = variables[inst->getOperand(0)];
                         const var &rhs = variables[inst->getOperand(1)];
 
-                        variables[inst] = handle_bitwise_and_component<BlueprintFieldType, ArithmetizationParams>(
-                            lhs, rhs,
-                            bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+                        // TODO: replace mock with component
+
+                        typename BlueprintFieldType::integral_type x_integer(var_value(assignmnt, lhs).data);
+                        typename BlueprintFieldType::integral_type y_integer(var_value(assignmnt, rhs).data);
+                        typename BlueprintFieldType::value_type res = (x_integer & y_integer);
+                        variables[inst] = put_into_assignment(res);
 
                         return inst->getNextNonDebugInstruction();
                     }
@@ -899,9 +930,13 @@ namespace nil {
                         const var &lhs = variables[inst->getOperand(0)];
                         const var &rhs = variables[inst->getOperand(1)];
 
-                        variables[inst] = handle_bitwise_or_component<BlueprintFieldType, ArithmetizationParams>(
-                            lhs, rhs,
-                            bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+                        // TODO: replace mock with component
+
+                        typename BlueprintFieldType::integral_type x_integer(var_value(assignmnt, lhs).data);
+                        typename BlueprintFieldType::integral_type y_integer(var_value(assignmnt, rhs).data);
+                        typename BlueprintFieldType::value_type res = (x_integer | y_integer);
+                        variables[inst] = put_into_assignment(res);
+
 
                         return inst->getNextNonDebugInstruction();
                     }
@@ -910,9 +945,12 @@ namespace nil {
                         const var &lhs = variables[inst->getOperand(0)];
                         const var &rhs = variables[inst->getOperand(1)];
 
-                        variables[inst] = handle_bitwise_xor_component<BlueprintFieldType, ArithmetizationParams>(
-                            lhs, rhs,
-                            bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+                        // TODO: replace mock with component
+
+                        typename BlueprintFieldType::integral_type x_integer(var_value(assignmnt, lhs).data);
+                        typename BlueprintFieldType::integral_type y_integer(var_value(assignmnt, rhs).data);
+                        typename BlueprintFieldType::value_type res = (x_integer ^ y_integer);
+                        variables[inst] = put_into_assignment(res);
 
                         return inst->getNextNonDebugInstruction();
                     }
@@ -1005,8 +1043,7 @@ namespace nil {
                         auto vec = layout_resolver->get_type_layout<BlueprintFieldType>(alloca->getAllocatedType());
                         ptr_type res_ptr = stack_memory.add_cells(vec);
                         log.debug("Alloca: {}", res_ptr);
-                        assignmnt.public_input(0, public_input_idx) = res_ptr;
-                        frame.scalars[inst] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        frame.scalars[inst] = put_into_assignment(res_ptr);
                         return inst->getNextNonDebugInstruction();
                     }
                     case llvm::Instruction::GetElementPtr: {
@@ -1019,8 +1056,7 @@ namespace nil {
                         std::ostringstream oss;
                         oss << gep_res.data;
                         log.debug("GEP: {}", oss.str());
-                        assignmnt.public_input(0, public_input_idx) = gep_res;
-                        frame.scalars[gep] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        frame.scalars[gep] = put_into_assignment(gep_res);
                         return inst->getNextNonDebugInstruction();
                     }
                     case llvm::Instruction::Load: {
@@ -1075,8 +1111,7 @@ namespace nil {
                         ptr_type ptr = stack_memory.inttoptr(offset);
                         log.debug("IntToPtr: {} {}", oss.str(), ptr);
                         ASSERT(ptr != 0);
-                        assignmnt.public_input(0, public_input_idx) = ptr;
-                        frame.scalars[inst] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        frame.scalars[inst] = put_into_assignment(ptr);
                         return inst->getNextNonDebugInstruction();
                     }
                     case llvm::Instruction::Trunc: {
@@ -1218,8 +1253,7 @@ namespace nil {
                                 auto &upper_frame_variables = call_stack.top().scalars;
 
                                 upper_frame_variables[extracted_frame.caller] = extracted_frame.scalars[ret_val];
-                                assignmnt.public_input(0, public_input_idx) = extracted_frame.ret_ptr;
-                                upper_frame_variables[extracted_frame.caller] = var(0, public_input_idx++, false, var::column_type::public_input);
+                                upper_frame_variables[extracted_frame.caller] = put_into_assignment(extracted_frame.ret_ptr);
                             } else {
                                 auto &upper_frame_variables = call_stack.top().scalars;
                                 upper_frame_variables[extracted_frame.caller] = extracted_frame.scalars[ret_val];
@@ -1332,39 +1366,35 @@ namespace nil {
                 }
                 auto &function = *entry_point_it;
 
-                auto public_input_reader = PublicInputReader<BlueprintFieldType, var, assignment<ArithmetizationType>>(
+                auto input_reader = InputReader<BlueprintFieldType, var, assignment<ArithmetizationType>>(
                     base_frame, stack_memory, assignmnt, *layout_resolver);
-                if (!public_input_reader.fill_public_input(function, public_input)) {
+                if (!input_reader.fill_public_input(function, public_input)) {
                     std::cerr << "Public input does not match the circuit signature";
-                    const std::string &error = public_input_reader.get_error();
+                    const std::string &error = input_reader.get_error();
                     if (!error.empty()) {
                         std::cout << ": " << error;
                     }
                     std::cout << std::endl;
                     return false;
                 }
-                public_input_idx = public_input_reader.get_idx();
+                public_input_idx = input_reader.get_idx();
                 call_stack.emplace(std::move(base_frame));
 
                 for (const llvm::GlobalVariable &global : module.getGlobalList()) {
                     const llvm::Constant *initializer = global.getInitializer();
                     if (initializer->getType()->isAggregateType()) {
                         ptr_type ptr = store_constant<var>(initializer);
-                        assignmnt.public_input(0, public_input_idx) = ptr;
-                        globals[&global] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        globals[&global] = put_into_assignment(ptr);
                     } else if (initializer->getType()->isIntegerTy() ||
                         (initializer->getType()->isFieldTy() && field_arg_num<BlueprintFieldType>(initializer->getType()) == 1)) {
                         ptr_type ptr = stack_memory.add_cells({layout_resolver->get_type_size(initializer->getType())});
                         std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = marshal_field_val(initializer);
-                        assignmnt.public_input(0, public_input_idx) = marshalled_field_val[0];
-                        stack_memory.store(ptr, var(0, public_input_idx++, false, var::column_type::public_input));
-                        assignmnt.public_input(0, public_input_idx) = ptr;
-                        globals[&global] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        stack_memory.store(ptr, put_into_assignment(marshalled_field_val[0]));
+                        globals[&global] = put_into_assignment(ptr);
                     } else if (llvm::isa<llvm::ConstantPointerNull>(initializer)) {
                         ptr_type ptr = stack_memory.add_cells({layout_resolver->get_type_size(initializer->getType())});
                         stack_memory.store(ptr, zero_var);
-                        assignmnt.public_input(0, public_input_idx) = ptr;
-                        globals[&global] = var(0, public_input_idx++, false, var::column_type::public_input);
+                        globals[&global] = put_into_assignment(ptr);
                     } else {
                         UNREACHABLE("Unhandled global variable");
                     }
@@ -1388,21 +1418,17 @@ namespace nil {
 
                                 // Store the pointer to BasicBlock to memory
                                 // TODO(maksenov): avoid C++ pointers in assignment table
-                                assignmnt.public_input(0, public_input_idx) = (const uintptr_t)succ;
-                                stack_memory.store(ptr, var(0, public_input_idx++, false, var::column_type::public_input));
+                                stack_memory.store(ptr, put_into_assignment((const uintptr_t)succ));
 
-                                assignmnt.public_input(0, public_input_idx) = ptr;
-                                labels[succ] = var(0, public_input_idx++, false, var::column_type::public_input);
+                                labels[succ] = put_into_assignment(ptr);
                             }
                         }
                     }
                 }
 
                 // Initialize undef and zero vars once
-                assignmnt.public_input(0, public_input_idx) = typename BlueprintFieldType::value_type();
-                undef_var = var(0, public_input_idx++, false, var::column_type::public_input);
-                assignmnt.public_input(0, public_input_idx) = 0;
-                zero_var = var(0, public_input_idx++, false, var::column_type::public_input);
+                undef_var = put_into_assignment(typename BlueprintFieldType::value_type());
+                zero_var = put_into_assignment(typename BlueprintFieldType::value_type(0));
 
                 const llvm::Instruction *next_inst = &function.begin()->front();
                 while (true) {
@@ -1414,6 +1440,12 @@ namespace nil {
                         return false;
                     }
                 }
+            }
+
+            template<typename InputType>
+            var put_into_assignment(InputType input) {
+                assignmnt.public_input(0, public_input_idx) = input;
+                return var(0, public_input_idx++, false, var::column_type::public_input);
             }
 
         private:
