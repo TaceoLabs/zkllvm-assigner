@@ -29,21 +29,28 @@
 
 #include <set>
 
+#include <nil/blueprint/blueprint/plonk/assignment.hpp>
+#include <nil/blueprint/memory.hpp>
+#include <nil/blueprint/stack.hpp>
+
 namespace nil {
     namespace blueprint {
         namespace onnx {
+
+            static constexpr size_t om_tensor_list_size = 3;
+            static constexpr size_t om_tensor_size = 8;
+
             template<typename BlueprintFieldType, typename ArithmetizationType>
                 class runtime {
 
                     using var = crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
                     using om_tensor_ptr_type = typename BlueprintFieldType::value_type;
                     public:
-                        
                         assignment<ArithmetizationType>* assignmnt;
                         program_memory<var>* memory;
                         size_t* public_input_idx;
 
-                        const std::set<llvm::StringRef> SUPPORTED_FUNCTIONS {"omTensorListGetOmtArray", "omTensorGetDataPtr", "omTensorGetStrides", "omTensorGetShape", "omTensorListGetSize", "omTensorGetDataType", "omTensorGetRank", "omTensorCreateUntyped", "omTensorSetDataPtr", "omTensorSetDataType", "omTensorListCreateWithOwnership"};
+                        const std::set<llvm::StringRef> SUPPORTED_FUNCTIONS {"omTensorListGetOmtArray", "omTensorGetDataPtr", "omTensorGetStrides", "omTensorGetShape", "omTensorListGetSize", "omTensorGetDataType", "omTensorGetRank", "omTensorCreateUntyped", "omTensorSetDataPtr", "omTensorSetDataType", "omTensorListCreateWithOwnership", "omTensorListCreate"};
                         
                         var handle_om_tensor_list_get_omt_array(om_tensor_ptr_type& om_tensor_list_ptr) {
                             //get the pointer to tensor types
@@ -53,26 +60,13 @@ namespace nil {
 
                         var handle_om_tensor_get_data_ptr(om_tensor_ptr_type& om_tensor_ptr) {
                             ptr_type aligned_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(om_tensor_ptr.data) + 1;
-                            
-                            std::cout << "resolving *" << aligned_ptr << " leads to " << var_value(*assignmnt, memory->load(aligned_ptr)).data << std::endl;
-                            std::cout << "there we have: " << std::endl << "[";
                             ptr_type test_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(var_value(*assignmnt, memory->load(aligned_ptr)).data);
-                            for (unsigned i = 0;i<10;++i) {
-                                std::cout << var_value(*assignmnt, memory->load(test_ptr++)).data << ", "; 
-                            }
-                            std::cout << "]" << std::endl;
                             return memory->load(aligned_ptr);
                         }
 
                         var handle_om_tensor_get_shape(om_tensor_ptr_type& om_tensor_ptr) {
                             ptr_type shape_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(om_tensor_ptr.data) + 3;
-                            std::cout << "resolving *" << shape_ptr << " leads to " << var_value(*assignmnt, memory->load(shape_ptr)).data << std::endl;
-                            std::cout << "there we have: " << std::endl << "[";
                             ptr_type test_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(var_value(*assignmnt, memory->load(shape_ptr)).data);
-                            for (unsigned i = 0;i<2;++i) {
-                                std::cout << var_value(*assignmnt, memory->load(test_ptr++)).data << ", "; 
-                            }
-                            std::cout << "]" << std::endl;
                             return memory->load(shape_ptr);
                         }
 
@@ -136,25 +130,34 @@ namespace nil {
                             var _omts = frame.scalars[inst->getOperand(0)];
                             var size = frame.scalars[inst->getOperand(1)];
                             var owning = frame.scalars[inst->getOperand(2)];
-                            std::cout << "I return " << ptr << std::endl;
-                            std::cout << "I store " << var_value(*assignmnt, _omts).data << std::endl;
-                            std::cout << "I store " << var_value(*assignmnt, size).data << std::endl;
-                            std::cout << "I store " << var_value(*assignmnt, owning).data << std::endl;
                             memory->store(ptr++, _omts);
                             memory->store(ptr++, size);
                             memory->store(ptr, owning);
                             return val_ptr;
                         }
 
+                        var handle_om_tensor_list_create(const llvm::CallInst* inst, stack_frame<var>& frame, om_tensor_ptr_type& om_tensor_ptr) {
+                            var val_ptr;
+                            ptr_type ptr = create_empty_om_tensor_list(val_ptr); 
+                            //get _omts
+                            //get size
+                            //get owning
+                            var _omts = frame.scalars[inst->getOperand(0)];
+                            var size = frame.scalars[inst->getOperand(1)];
+                            memory->store(ptr++, _omts);
+                            memory->store(ptr++, size);
+                            return val_ptr;
+                        }
+
                         inline ptr_type create_empty_om_tensor(var& var_ptr) {
-                            ptr_type ptr = memory->add_cells(std::vector<unsigned>(8, 1));
+                            ptr_type ptr = memory->malloc(om_tensor_size);
                             assignmnt->public_input(0,*public_input_idx) = ptr;
                             var_ptr = var(0, (*public_input_idx)++, false, var::column_type::public_input);
                             return ptr;
                         }
 
                         inline ptr_type create_empty_om_tensor_list(var& var_ptr) {
-                            ptr_type ptr = memory->add_cells(std::vector<unsigned>(3, 1));
+                            ptr_type ptr = memory->malloc(om_tensor_list_size);
                             assignmnt->public_input(0,*public_input_idx) = ptr;
                             var_ptr = var(0, (*public_input_idx)++, false, var::column_type::public_input);
                             return ptr;
@@ -182,7 +185,7 @@ namespace nil {
                                         && fun->getArg(1)->getType()->isIntegerTy()
                                         && fun->getArg(2)->getType()->isPointerTy()
                                         && fun->getArg(3)->getType()->isPointerTy();
-                                } else if (fun_name == "omTensorSetDataType") {
+                                } else if (fun_name == "omTensorSetDataType" || fun_name == "omTensorListCreate") {
                                     return  fun->arg_size() == 2
                                         && fun->getArg(0)->getType()->isPointerTy()
                                         && fun->getArg(1)->getType()->isIntegerTy();
@@ -234,6 +237,9 @@ namespace nil {
                                return false;
                            } else if (fun_name == "omTensorListCreateWithOwnership") {
                                ret_val = handle_om_tensor_list_create_with_ownership(inst, frame, ptr);
+                               return true;
+                           } else if (fun_name == "omTensorListCreate") {
+                               ret_val = handle_om_tensor_list_create(inst, frame, ptr);
                                return true;
                            }
 

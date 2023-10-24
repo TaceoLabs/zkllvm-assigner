@@ -146,6 +146,7 @@ namespace nil {
                 switch (type->getTypeID()) {
                 case llvm::Type::IntegerTyID:
                 case llvm::Type::PointerTyID:
+                case llvm::Type::FloatTyID:
                 case llvm::Type::ZkFixedPointTyID:
                     return {get_type_size(type)};
                 case llvm::Type::GaloisFieldTyID: {

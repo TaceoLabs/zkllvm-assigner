@@ -26,6 +26,14 @@
 #ifndef CRYPTO3_BLUEPRINT_COMPONENT_INSTRUCTION_PARSER_HPP
 #define CRYPTO3_BLUEPRINT_COMPONENT_INSTRUCTION_PARSER_HPP
 
+#define PRINT_VEC(X) {                   \
+        std::cout << "[";                \
+        for (auto i : X) {               \
+            std::cout << i << ", ";      \
+        } \
+        std::cout << "]" << std::endl;   \
+    }
+
 #include <variant>
 #include <stack>
 
@@ -63,8 +71,10 @@
 #include <nil/blueprint/integers/bit_de_composition.hpp>
 
 #include <nil/blueprint/fixedpoint/addition.hpp>
-#include <nil/blueprint/fixedpoint/mul_rescale.hpp>
 #include <nil/blueprint/fixedpoint/subtraction.hpp>
+#include <nil/blueprint/fixedpoint/mul_rescale.hpp>
+#include <nil/blueprint/fixedpoint/division.hpp>
+#include <nil/blueprint/fixedpoint/exp.hpp>
 
 #include <nil/blueprint/comparison/comparison.hpp>
 #include <nil/blueprint/comparison/f_comparison.hpp>
@@ -224,8 +234,15 @@ namespace nil {
 
             std::vector<typename BlueprintFieldType::value_type> marshal_field_val(const llvm::Value *val) {
 
-                ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val));
-                if (llvm::isa<llvm::ConstantInt>(val)) {
+                ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val) || llvm::isa<llvm::ConstantFP>(val));
+                if (llvm::isa<llvm::ConstantFP>(val)) {
+                    //TACEO_TODO
+                    //just return 1 for debugging MNIST
+                    typename BlueprintFieldType::value_type field_constant = 1;
+                    return value_into_vector<BlueprintFieldType, BlueprintFieldType>(field_constant);
+
+                }
+                else if (llvm::isa<llvm::ConstantInt>(val)) {
                     return field_dependent_marshal_val<BlueprintFieldType>(val);
                 } else {
                     switch (llvm::cast<llvm::GaloisFieldType>(val->getType())->getFieldKind()) {
@@ -355,6 +372,7 @@ namespace nil {
                     ASSERT(stack_memory[dst].offset - stack_memory[dst - 1].offset ==
                             stack_memory[src].offset - stack_memory[src - 1].offset);
                     stack_memory[dst++].v = stack_memory[src++].v;
+
                 }
             }
 
@@ -362,10 +380,7 @@ namespace nil {
                 switch (id) {
                     case llvm::Intrinsic::assigner_malloc: {
                         size_t bytes = resolve_number<size_t>(frame, inst->getOperand(0));
-                        auto ptr = stack_memory.malloc(bytes);
-                        std::cout << "i allocated at " << ptr << " this many bytes "<< bytes<< std::endl;
-                        std::cout << "there is: " << var_value(assignmnt, stack_memory.load(ptr)).data << std::endl;
-                        assignmnt.public_input(0, public_input_idx) = ptr;
+                        assignmnt.public_input(0, public_input_idx) = stack_memory.malloc(bytes);
                         frame.scalars[inst] = var(0, public_input_idx++, false, var::column_type::public_input);
                         return true;
                     }
@@ -462,6 +477,16 @@ namespace nil {
 
                         return true;
                     }
+                    case llvm::Intrinsic::exp: {
+                       //call to exp
+                       ASSERT(inst->getNumOperands() == 2);
+                       ASSERT(inst->getOperand(0)->getType()->isZkFixedPointTy());
+                       //ASSERT(inst->getOperand(1)->getType()->isZkFixedPointTy());
+                       handle_fixedpoint_exp_component<BlueprintFieldType, ArithmetizationParams>(
+                                   inst, frame, bp, assignmnt, start_row);
+                       std::cout << "fexp result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
+                        return true;
+                    }
                     default:
                         UNREACHABLE("Unexpected intrinsic!");
                 }
@@ -470,37 +495,35 @@ namespace nil {
 
             void handle_store(ptr_type dst_ptr, const llvm::Value *val, stack_frame<var> & frame) {
                 size_t num_cells = layout_resolver->get_type_layout<BlueprintFieldType>(val->getType()).size();
+            auto size = layout_resolver->get_type_size(val->getType());
                 //we need a deep copy!!!!!!!
                 //This most likely is not 100% correct but it is better than before
                 if (num_cells == 1) {
                     stack_memory[dst_ptr].v = frame.scalars[val];
-                    std::cout << "single store " << var_value(assignmnt, stack_memory[dst_ptr].v).data << "->" << dst_ptr << std::endl;
                 } else {
+
                     ptr_type src_ptr = resolve_number<ptr_type>(frame.scalars[val]);
-                    for (size_t i = 0;i<num_cells;++i) {
-                        stack_memory[dst_ptr + i].v = stack_memory[src_ptr + i].v;
-                        
-                        std::cout << "storing " << (dst_ptr + i) << "<-" << (src_ptr + i)<<std::endl;
-                //        std::cout << "which is value " << var_value(assignmnt, stack_memory[dst_ptr + i].v).data << std::endl;
-                    }
+                    //memcpy(dst_ptr, resolve_number<ptr_type>(frame.scalars[val]), size);
+                   for (size_t i = 0;i<num_cells;++i) {
+                       stack_memory[dst_ptr + i].v = stack_memory[src_ptr + i].v;
+                   }
                 }
             }
 
             void handle_load(ptr_type src_ptr, const llvm::Value *val, stack_frame<var> &frame) {
-                std::cout << "handle load from src " << src_ptr << std::endl;
                 size_t num_cells = layout_resolver->get_type_layout<BlueprintFieldType>(val->getType()).size();
+                auto size = layout_resolver->get_type_size(val->getType());
                 if (num_cells == 1) {
-                    std::cout << "single load " << var_value(assignmnt, stack_memory[src_ptr].v).data << std::endl;
                     frame.scalars[val] = stack_memory[src_ptr].v;
                 }
                 else {
                     //TACEO_TODO Do we break something here now????
                     if (val->getType()->isStructTy()) {
                         //this add_cells can be better with the layout resolver but yeah...
-                        ptr_type dst_ptr = stack_memory.add_cells(std::vector<unsigned>(num_cells, 1));
+                        ptr_type dst_ptr = stack_memory.add_cells(std::vector<unsigned>(num_cells, 8));
+                        //memcpy(dst_ptr, src_ptr, size);
                         for (size_t i=0;i<num_cells;++i) {
                             stack_memory[dst_ptr + i].v = stack_memory[src_ptr + i].v;
-                            std::cout << "loading " << (dst_ptr + i) << "<-" << (src_ptr + i)<<std::endl;
                         }
                         assignmnt.public_input(0, public_input_idx) = dst_ptr;
                         frame.scalars[val] = var(0, public_input_idx++, false, var::column_type::public_input);
@@ -616,7 +639,13 @@ namespace nil {
                     }
                 } else if (auto addr = llvm::dyn_cast<llvm::BlockAddress>(c)) {
                     frame.scalars[c] = labels[addr->getBasicBlock()];
-                } else {
+                } else if (auto expr = llvm::dyn_cast<llvm::ConstantFP>(c)) {
+                    //TACEO_TODO
+                    //ALSO HERE STORE 1 FOR DEBUG
+                    assignmnt.public_input(0, public_input_idx) = 1;
+                    frame.scalars[c] = var(0, public_input_idx++, false, var::column_type::public_input);
+                } 
+                else {
                     // The only other known constant is an address of a function in CallInst,
                     // but there is no way to distinguish it
                     ASSERT(c->getType()->isPointerTy());
@@ -802,8 +831,12 @@ namespace nil {
                                 UNREACHABLE("Function " + fun_name.str() + " has no implementation.");
                             }
                         }
-                        llvm::outs() << "    Calling " <<fun_name << "\n";
                         stack_frame<var> new_frame;
+                        if (fun->getReturnType()->isAggregateType()) {
+                            new_frame.ret_ptr = stack_memory.add_cells(layout_resolver->get_type_layout<BlueprintFieldType>(fun->getReturnType()));
+                        } else {
+                            new_frame.ret_ptr = 0;
+                        }
                         auto &new_variables = new_frame.scalars;
                         for (int i = 0; i < fun->arg_size(); ++i) {
                             llvm::Argument *arg = fun->getArg(i);
@@ -817,22 +850,6 @@ namespace nil {
                             }
                             
 
-                        }
-                        if (fun_name == "_mlir_ciface_main_graph") {
-                            //print all data ptr
-                            for (int i = 0;i<fun->arg_size();++i) {
-                                ptr_type ptr = resolve_number<ptr_type>(new_variables[fun->getArg(i)]);
-                                std::cout << "===============" << std::endl;
-                                std::cout << "deref " << ptr << std::endl;
-                                std::cout << "_data " << resolve_number<ptr_type>(stack_memory.load(ptr++)) << std::endl;
-                                std::cout << "_aligned " << resolve_number<ptr_type>(stack_memory.load(ptr++)) << std::endl;
-                                std::cout << "rank " << resolve_number<ptr_type>(stack_memory.load(ptr++)) << std::endl;
-                                std::cout << "shape[0]" << resolve_number<ptr_type>(stack_memory.load(ptr++)) << std::endl;
-                                std::cout << "shape[1]" << resolve_number<ptr_type>(stack_memory.load(ptr++)) << std::endl;
-                                std::cout << "strides[0]" << resolve_number<ptr_type>(stack_memory.load(ptr++)) << std::endl;
-                                std::cout << "strides[1] " << resolve_number<ptr_type>(stack_memory.load(ptr++)) << std::endl;
-                                std::cout << "===============" << std::endl;
-                            }
                         }
                         new_frame.caller = call_inst;
                         call_stack.emplace(std::move(new_frame));
@@ -1028,7 +1045,6 @@ namespace nil {
                         ptr += layout_resolver->get_flat_index<BlueprintFieldType>(
                             insert_inst->getAggregateOperand()->getType(), insert_inst->getIndices());
                         
-                        std::cout << "insertvalue from " << ptr << "<-" << var_value(assignmnt, frame.scalars[insert_inst->getInsertedValueOperand()]).data << std::endl;
                         stack_memory.store(ptr, frame.scalars[insert_inst->getInsertedValueOperand()]);
                         frame.scalars[inst] = frame.scalars[insert_inst->getAggregateOperand()];
                         return inst->getNextNonDebugInstruction();
@@ -1110,7 +1126,8 @@ namespace nil {
                                             //dim.reduce(|a,b| a + b)
                                             // get pointer to tensor data
                                             ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr));
-                                        std::cout << _data_ptr << "<- data_ptr\n" << std::endl;
+                                            ptr_type _aligned_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr+1));
+                                            std::cout << _data_ptr << "= data_ptr\n" << std::endl;
                                             std::cout << "[";
                                             for (unsigned j=0;j<10;++j) {
                                                 std::cout << var_value(assignmnt, stack_memory.load(_data_ptr + j)).data << ", ";
@@ -1203,16 +1220,12 @@ namespace nil {
                                 upper_frame_vectors[extracted_frame.caller] = res;
                             } else if (ret_type->isAggregateType()) {
                                 ptr_type ret_ptr = resolve_number<ptr_type>(extracted_frame, ret_val);
-                                ptr_type allocated_copy = stack_memory.add_cells(
-                                    layout_resolver->get_type_layout<BlueprintFieldType>(ret_type));
                                 auto size = layout_resolver->get_type_size(ret_type);
-                                // TODO(maksenov): check if overwriting is possible here
-                                //                 (looks like it is not)
-                                memcpy(allocated_copy, ret_ptr, size);
+                                memcpy(extracted_frame.ret_ptr, ret_ptr, size);
                                 auto &upper_frame_variables = call_stack.top().scalars;
 
                                 upper_frame_variables[extracted_frame.caller] = extracted_frame.scalars[ret_val];
-                                assignmnt.public_input(0, public_input_idx) = allocated_copy;
+                                assignmnt.public_input(0, public_input_idx) = extracted_frame.ret_ptr;
                                 upper_frame_variables[extracted_frame.caller] = var(0, public_input_idx++, false, var::column_type::public_input);
                             } else {
                                 auto &upper_frame_variables = call_stack.top().scalars;
@@ -1228,7 +1241,6 @@ namespace nil {
 
                             handle_fixedpoint_addition_component<BlueprintFieldType, ArithmetizationParams>(
                                        inst, frame, bp, assignmnt, start_row);
-                            std::cout << "fadd result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
@@ -1240,7 +1252,6 @@ namespace nil {
 
                             handle_fixedpoint_subtraction_component<BlueprintFieldType, ArithmetizationParams>(
                                        inst, frame, bp, assignmnt, start_row);
-                            std::cout << "fsub result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
@@ -1252,7 +1263,17 @@ namespace nil {
 
                            handle_fixedpoint_mul_rescale_component<BlueprintFieldType, ArithmetizationParams>(
                                       inst, frame, bp, assignmnt, start_row);
-                           std::cout << "fmul result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
+                            return inst->getNextNonDebugInstruction();
+                        } else {
+                            UNREACHABLE("can only fadd with fixed points");
+                        }
+                    }
+                    case llvm::Instruction::FDiv: {
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+
+                           handle_fixedpoint_division_component<BlueprintFieldType, ArithmetizationParams>(
+                                      inst, frame, bp, assignmnt, start_row);
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");

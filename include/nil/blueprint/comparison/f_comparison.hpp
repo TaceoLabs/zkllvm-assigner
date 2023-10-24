@@ -57,14 +57,13 @@ namespace nil {
             &assignment,
             std::uint32_t start_row,
             std::size_t &public_input_idx) {
-                // TACEO_TODO FixedPointManifestReader is super hacky! we do not want that
                 using non_native_policy_type = basic_non_native_policy<BlueprintFieldType>;
                 using var = crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
                 using component_type = components::fix_cmp<
                     crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>,
                     BlueprintFieldType, basic_non_native_policy<BlueprintFieldType>>;
-                const auto params = PolicyManager::get_parameters(FixedPointManifestReader<component_type, ArithmetizationParams,1,1>::get_witness(0));
-                component_type component_instance(params.witness, FixedPointManifestReader<component_type, ArithmetizationParams,1,1>::get_constants(), FixedPointManifestReader<component_type, ArithmetizationParams,1,1>::get_public_inputs(), 1, 1);
+                const auto params = PolicyManager::get_parameters(ManifestReader<component_type, ArithmetizationParams,1,1>::get_witness(0));
+                component_type component_instance(params.witness, ManifestReader<component_type, ArithmetizationParams,1,1>::get_constants(), ManifestReader<component_type, ArithmetizationParams,1,1>::get_public_inputs(), 1, 1);
 
                  components::generate_circuit(component_instance, bp, assignment, {x, y}, start_row);
                  auto cmp_result = components::generate_assignments(component_instance, assignment, {x, y}, start_row);
@@ -80,8 +79,12 @@ namespace nil {
                     }
                     case llvm::FCmpInst::FCMP_OGE:	
                     case llvm::FCmpInst::FCMP_UGE:	{
-                        UNREACHABLE("TACEO_TODO implement fcmp >=");
-                        break;
+                        //TACEO_TODO what is correct way to handle that?
+                        if (var_value(assignment, cmp_result.gt).data == 1) {
+                            return cmp_result.gt;
+                        } else {
+                            return cmp_result.eq;
+                        }
                     }
                     case llvm::FCmpInst::FCMP_OLE:	
                     case llvm::FCmpInst::FCMP_ULE: {

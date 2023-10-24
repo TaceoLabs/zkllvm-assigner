@@ -51,10 +51,10 @@ namespace nil {
                                                                                                 std::numeric_limits<std::int32_t>::max(), true);
             };
 
-            template<typename ComponentType, typename ArithmetizationParams>
+            template<typename ComponentType, typename ArithmetizationParams, size_t... manifest_args>
             struct ManifestReader {
                 inline static typename ComponentType::manifest_type manifest =
-                        CompilerRestrictions<ArithmetizationParams>::common_restriction_manifest.intersect(ComponentType::get_manifest());
+                        CompilerRestrictions<ArithmetizationParams>::common_restriction_manifest.intersect(ComponentType::get_manifest(manifest_args...));
 
                 template<typename... Args>
                 static std::vector <std::pair<std::uint32_t, std::uint32_t>>
@@ -88,43 +88,6 @@ namespace nil {
                 }
             };
 
-            //TACEO_TODO THINK ABOUT SOMEHTING BETTER THAN THIS ON MONDAY (written on 13.10.2023)
-            template<typename ComponentType, typename ArithmetizationParams, uint8_t M1, uint8_t M2>
-            struct FixedPointManifestReader {
-                inline static typename ComponentType::manifest_type manifest =
-                        CompilerRestrictions<ArithmetizationParams>::common_restriction_manifest.intersect(ComponentType::get_manifest(M1, M2));
-
-                template<typename... Args>
-                static std::vector <std::pair<std::uint32_t, std::uint32_t>>
-                get_witness(Args... args) {
-                    ASSERT(manifest.is_satisfiable());
-                    auto witness_amount_ptr = manifest.witness_amount;
-                    std::vector <std::pair<std::uint32_t, std::uint32_t>> values;
-                    for (auto it = witness_amount_ptr->begin();
-                         it != witness_amount_ptr->end(); it++) {
-                        const auto witness_amount = *it;
-                        values.emplace_back(witness_amount,
-                                            ComponentType::get_rows_amount(witness_amount,
-                                                                           args...));
-                    }
-                    ASSERT(values.size() > 0);
-                    return values;
-                }
-
-                static typename ComponentType::component_type::constant_container_type
-                get_constants() {
-                    typename ComponentType::component_type::constant_container_type constants;
-                    std::iota(constants.begin(), constants.end(), 0); // fill 0, 1, ...
-                    return constants;
-                }
-
-                static typename ComponentType::component_type::public_input_container_type
-                get_public_inputs() {
-                    typename ComponentType::component_type::public_input_container_type public_inputs;
-                    std::iota(public_inputs.begin(), public_inputs.end(), 0); // fill 0, 1, ...
-                    return public_inputs;
-                }
-            };
         }    // namespace detail
     }    // namespace blueprint
 }    // namespace nil

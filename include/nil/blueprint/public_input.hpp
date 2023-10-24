@@ -31,6 +31,7 @@
 #include "llvm/IR/Type.h"
 
 #include <nil/blueprint/layout_resolver.hpp>
+#include <nil/blueprint/onnx/runtime.hpp>
 
 #include <nil/blueprint/stack.hpp>
 #include <nil/blueprint/non_native_marshalling.hpp>
@@ -284,8 +285,8 @@ namespace nil {
                 return frame.vectors[vector_arg].size() > 0;
             }
 
-            bool parse_tensor_data(var& data_ptr, const boost::json::array &tensor_arr) {
-                ptr_type ptr = memory.add_cells(std::vector<unsigned>(tensor_arr.size(), 1));
+            bool parse_tensor_data(var& data_ptr, const boost::json::array &tensor_arr, size_t element_offset) {
+                ptr_type ptr = memory.add_cells(std::vector<unsigned>(tensor_arr.size(), element_offset));
                 assignmnt.public_input(0, public_input_idx) = ptr;
                 data_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
 
@@ -300,17 +301,17 @@ namespace nil {
                 return true;
             }
 
-            bool parse_dim_array(var& var_dim_ptr, var& var_stride_ptr, const boost::json::array &dim_arr) {
+            bool parse_dim_array(var& var_dim_ptr, var& var_stride_ptr, const boost::json::array &dim_arr, size_t element_offset) {
                 if (dim_arr.size() == 0) {
                     //empty array
                     return false;
                 }
                 //dimensions 
-                ptr_type dim_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), 1));
+                ptr_type dim_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), element_offset));
                 assignmnt.public_input(0, public_input_idx) = dim_ptr;
                 var_dim_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
                 //strides
-                ptr_type stride_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), 1));
+                ptr_type stride_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), element_offset));
                 assignmnt.public_input(0, public_input_idx) = stride_ptr;
                 var_stride_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
                 unsigned stride = 1;
@@ -333,7 +334,7 @@ namespace nil {
                 return true;
             }
 
-            bool try_om_tensor(var& om_tensor_ptr, const boost::json::object &value) {
+            bool try_om_tensor(var& om_tensor_ptr, const boost::json::object &value, size_t element_offset) {
                 if (value.size() != 2 || !value.contains("data") || !value.contains("dim")) {
                     return false;
                 }
@@ -342,12 +343,12 @@ namespace nil {
                 }
 
                 var data_ptr;
-                if (!parse_tensor_data(data_ptr, value.at("data").as_array())) {
+                if (!parse_tensor_data(data_ptr, value.at("data").as_array(), element_offset)) {
                     return false;
                 }
                 var dim_ptr;
                 var strides_ptr;
-                if (!parse_dim_array(dim_ptr, strides_ptr, value.at("dim").as_array())) {
+                if (!parse_dim_array(dim_ptr, strides_ptr, value.at("dim").as_array(), element_offset)) {
                     return false;
                 }
 
@@ -366,29 +367,19 @@ namespace nil {
                 //   int64_t _rank;          -> rank
                 //   OM_DATA_TYPE _dataType; -> ONNX data type
                 //   int64_t _owning;        -> not used by us
-                ptr_type ptr = memory.add_cells(std::vector<unsigned>(8, 1));
+                ptr_type ptr = memory.add_cells(std::vector<unsigned>(onnx::om_tensor_size, element_offset));
                 assignmnt.public_input(0, public_input_idx) = ptr;
                 om_tensor_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
 
                 //TACEO_TODO Lets check if we need to store something at the empty places 
-                std::cout << "===========================================" << std::endl;
-                std::cout << "storing allocated " << ptr << "<-" << var_value(assignmnt, data_ptr).data << "\n";
                 memory.store(ptr++, data_ptr);     // _allocatedPtr; 
-                std::cout << "storing aligned ptr to " << ptr << "<-" << var_value(assignmnt, data_ptr).data<< "\n";
                 memory.store(ptr++, data_ptr);     // _alignedPtr;   
-                std::cout << "storing offset to " << ptr << "<- NULL\n";
                 ptr++;                             // _offset not used so leave it be;   
-                std::cout << "storing shape ptr to " << ptr << "<-" <<  var_value(assignmnt, dim_ptr).data<< "\n";
                 memory.store(ptr++, dim_ptr);      // _shape 
-                std::cout << "storing strides ptr to " << ptr << "<-" << var_value(assignmnt, strides_ptr).data<< "\n";
                 memory.store(ptr++, strides_ptr);  // _strides 
-                std::cout << "storing rank ptr to " << ptr << "<-" << var_value(assignmnt, tensor_rank).data<< "\n";
                 memory.store(ptr++, tensor_rank);  // _rank
-                std::cout << "storing data type ptr to " << "<-NULL\n";
-                memory.store(ptr++, data_type);  // _dataType
-                std::cout << "storing owning ptr to " << "<-NULL\n";
+                memory.store(ptr++, data_type);    // _dataType
                 ptr++;                             // _owning
-                std::cout << "===========================================" << std::endl;
                 
                 return true;
             }
@@ -400,21 +391,22 @@ namespace nil {
                 if (!value.contains("tensor_list") || !value.at("tensor_list").is_array()) {
                     return false;
                 }
+                //TACEO_TODO this is a little bit hacky as we abuse the fact that ptr type is same
+                //size as fixed point. Maybe think of something better
+                size_t fp_size = layout_resolver.get_type_size(arg_type);
                 // build the struct:
                 //   OMTensor **_omts; // OMTensor array
                 //   int64_t _size;    // Number of elements in _omts.
                 //   int64_t _owning;  // not used by us
-                ptr_type om_tensor_list_ptr = memory.add_cells(std::vector<unsigned>(3, 1));
+                ptr_type om_tensor_list_ptr = memory.add_cells(std::vector<unsigned>(onnx::om_tensor_list_size, fp_size));
                 assignmnt.public_input(0, public_input_idx) = om_tensor_list_ptr;
                 frame.scalars[arg] = var(0, public_input_idx++, false, var::column_type::public_input);
-                llvm::outs() << "om_tensor_list_ptr: " << om_tensor_list_ptr << "\n";
 
                 auto json_arr = value.at("tensor_list").as_array();
                 //store pointer to tensor list (_omts)
-                ptr_type _omts_ptr = memory.add_cells(std::vector<unsigned>(json_arr.size(), 1));
+                ptr_type _omts_ptr = memory.add_cells(std::vector<unsigned>(json_arr.size(), fp_size));
                 assignmnt.public_input(0, public_input_idx) = _omts_ptr;
                 memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
-                llvm::outs() << "omts ptr: " << _omts_ptr << "\n";
                 //store _size
                 assignmnt.public_input(0, public_input_idx) = json_arr.size();
                 memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
@@ -425,7 +417,7 @@ namespace nil {
                         return false;
                     }
                     var current_tensor;
-                    if (!try_om_tensor(current_tensor, t.as_object())) {
+                    if (!try_om_tensor(current_tensor, t.as_object(), fp_size)) {
                         return false;
                     }
                    //llvm::outs() << "Storing to "<< _omts_ptr << "<-";
@@ -448,11 +440,10 @@ namespace nil {
                     return false;
                 }
                 const auto &json_str = value.at("string").as_string();
-                ptr_type ptr = memory.add_cells(std::vector<unsigned>(json_str.size() + 1, 1));
+                ptr_type ptr = memory.add_cells(std::vector<unsigned>(json_str.size() + 1, 8));
                 assignmnt.public_input(0, public_input_idx) = ptr;
                 auto pointer_var = var(0, public_input_idx++, false, var::column_type::public_input);
                 frame.scalars[arg] = pointer_var;
-                llvm::outs() << "element of *om_tensor_list" << ptr << "\n";
 
                 for (char c : json_str) {
                     assignmnt.public_input(0, public_input_idx) = c;
@@ -463,7 +454,6 @@ namespace nil {
                 assignmnt.public_input(0, public_input_idx) = 0;
                 auto final_zero = var(0, public_input_idx++, false, var::column_type::public_input);
                 memory.store(ptr++, final_zero);
-
                 return true;
             }
 

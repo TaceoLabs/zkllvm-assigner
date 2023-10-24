@@ -1,5 +1,5 @@
-#ifndef CRYPTO3_ASSIGNER_FIXEDPOINT_MULTIPLICATION_RESCALE_HPP
-#define CRYPTO3_ASSIGNER_FIXEDPOINT_MULTIPLICATION_RESCALE_HPP
+#ifndef CRYPTO3_ASSIGNER_FIXEDPOINT_DIVISION_HPP
+#define CRYPTO3_ASSIGNER_FIXEDPOINT_DIVISION_HPP
 
 #include "llvm/IR/Type.h"
 #include "llvm/IR/TypeFinder.h"
@@ -9,7 +9,7 @@
 
 #include <nil/blueprint/component.hpp>
 #include <nil/blueprint/basic_non_native_policy.hpp>
-#include <nil/blueprint/components/algebra/fixedpoint/plonk/mul_rescale.hpp>
+#include <nil/blueprint/components/algebra/fixedpoint/plonk/div.hpp>
 
 #include <nil/blueprint/asserts.hpp>
 #include <nil/blueprint/stack.hpp>
@@ -20,10 +20,10 @@ namespace nil {
         namespace detail {
 
             template<typename BlueprintFieldType, typename ArithmetizationParams>
-            typename components::fix_mul_rescale<
+            typename components::fix_div<
                 crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>,
                 BlueprintFieldType, basic_non_native_policy<BlueprintFieldType>>::result_type
-                handle_fixedpoint_mul_rescale_component(
+                handle_fixedpoint_division_component(
                     llvm::Value *operand0, llvm::Value *operand1,
                     std::map<const llvm::Value *,
                              crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>> &variables,
@@ -34,14 +34,14 @@ namespace nil {
 
                 using var = crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
 
-                using component_type = components::fix_mul_rescale<
+                using component_type = components::fix_div<
                     crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>,
                     BlueprintFieldType, basic_non_native_policy<BlueprintFieldType>>;
                 const auto p = PolicyManager::get_parameters(
-                    ManifestReader<component_type, ArithmetizationParams,1,1>::get_witness(0));
+                    ManifestReader<component_type, ArithmetizationParams,1,1>::get_witness(0,1,1));
                 component_type component_instance(
                     p.witness, ManifestReader<component_type, ArithmetizationParams,1,1>::get_constants(),
-                    ManifestReader<component_type, ArithmetizationParams,1,1>::get_public_inputs(), 1);
+                    ManifestReader<component_type, ArithmetizationParams,1,1>::get_public_inputs(), 1, 1);
 
                 // TACEO_TODO in the previous line I hardcoded 1 for now!!! CHANGE THAT
                 // TACEO_TODO make an assert that both have the same scale?
@@ -56,7 +56,7 @@ namespace nil {
 
         }    // namespace detail
         template<typename BlueprintFieldType, typename ArithmetizationParams>
-        void handle_fixedpoint_mul_rescale_component(
+        void handle_fixedpoint_division_component(
             const llvm::Instruction *inst,
             stack_frame<crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>> &frame,
             circuit<crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>> &bp,
@@ -70,7 +70,7 @@ namespace nil {
                 llvm::Type *op1_type = operand1->getType();
                 ASSERT(llvm::isa<llvm::ZkFixedPointType>(op0_type) &&
                        llvm::isa<llvm::ZkFixedPointType>(op1_type));
-                frame.scalars[inst] = detail::handle_fixedpoint_mul_rescale_component<BlueprintFieldType, ArithmetizationParams>(operand0, operand1, frame.scalars, bp, assignment, start_row).output;
+                frame.scalars[inst] = detail::handle_fixedpoint_division_component<BlueprintFieldType, ArithmetizationParams>(operand0, operand1, frame.scalars, bp, assignment, start_row).output;
 
                 //TACEO_TODO check Scale size here in LLVM???
                //ASSERT(llvm::cast<llvm::GaloisFieldType>(op0_type)->getFieldKind() ==
@@ -79,4 +79,4 @@ namespace nil {
     }        // namespace blueprint
 }    // namespace nil
 
-#endif    // CRYPTO3_ASSIGNER_FIXEDPOINT_MULTIPLICATION_RESCALE_HPP
+#endif    // CRYPTO3_ASSIGNER_FIXEDPOINT_DIVISION_HPP

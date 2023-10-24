@@ -48,6 +48,7 @@ namespace nil {
         struct stack_frame {
             std::map<const llvm::Value *, VarType> scalars;
             std::map<const llvm::Value *, std::vector<VarType>> vectors;
+            ptr_type ret_ptr;
             const llvm::CallInst *caller;
         };
 
