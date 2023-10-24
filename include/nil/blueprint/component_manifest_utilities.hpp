@@ -51,7 +51,7 @@ namespace nil {
                                                                                                 std::numeric_limits<std::int32_t>::max(), true);
             };
 
-            template<typename ComponentType, typename ArithmetizationParams, size_t... manifest_args>
+            template<typename ComponentType, typename ArithmetizationParams, uint8_t... manifest_args>
             struct ManifestReader {
                 inline static typename ComponentType::manifest_type manifest =
                         CompilerRestrictions<ArithmetizationParams>::common_restriction_manifest.intersect(ComponentType::get_manifest(manifest_args...));

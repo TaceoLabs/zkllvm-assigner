@@ -484,7 +484,6 @@ namespace nil {
                        //ASSERT(inst->getOperand(1)->getType()->isZkFixedPointTy());
                        handle_fixedpoint_exp_component<BlueprintFieldType, ArithmetizationParams>(
                                    inst, frame, bp, assignmnt, start_row);
-                       std::cout << "fexp result: " << var_value(assignmnt, frame.scalars[inst]).data << std::endl;
                         return true;
                     }
                     default:
@@ -1111,29 +1110,23 @@ namespace nil {
                                         // we need something better here
 
                                         ptr_type om_tensor_list_ptr = resolve_number<ptr_type>(extracted_frame, ret_val);
-                                        llvm::outs() << "ret val is " << om_tensor_list_ptr << "\n";
                                         //get _omts
                                         //get size 
                                         ptr_type _omts = resolve_number<ptr_type>(stack_memory.load(om_tensor_list_ptr));
                                         unsigned size = resolve_number<unsigned>(stack_memory.load(om_tensor_list_ptr + 1));
-                                        std::cout << _omts << "<- _omts\n" << std::endl;
-                                        std::cout << size << "<- size\n" << std::endl;
                                         for (unsigned i=0;i<size;++i) {
                                             //get pointer to tensor struct 
                                             ptr_type _struct_ptr = resolve_number<ptr_type>(stack_memory.load(_omts + (i * 8)));
-                                        std::cout << _struct_ptr << "<- struct_ptr\n" << std::endl;
                                             //TACEO_TODO for now only iterate over 10 -> we need to iterate over data size which is
                                             //dim.reduce(|a,b| a + b)
                                             // get pointer to tensor data
                                             ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr));
                                             ptr_type _aligned_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr+1));
-                                            std::cout << _data_ptr << "= data_ptr\n" << std::endl;
                                             std::cout << "[";
                                             for (unsigned j=0;j<10;++j) {
                                                 std::cout << var_value(assignmnt, stack_memory.load(_data_ptr + j)).data << ", ";
                                             }
                                             std::cout << "]" << std::endl;
-                                            
                                         }
 
                                     } else if (ret_val->getType()->isVectorTy()) {

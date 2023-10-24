@@ -38,10 +38,10 @@ namespace nil {
                     crypto3::zk::snark::plonk_constraint_system<BlueprintFieldType, ArithmetizationParams>,
                     BlueprintFieldType, basic_non_native_policy<BlueprintFieldType>>;
                 const auto p = PolicyManager::get_parameters(
-                    ManifestReader<component_type, ArithmetizationParams,1,1>::get_witness(0));
+                    ManifestReader<component_type, ArithmetizationParams,1>::get_witness(0));
                 component_type component_instance(
-                    p.witness, ManifestReader<component_type, ArithmetizationParams,1,1>::get_constants(),
-                    ManifestReader<component_type, ArithmetizationParams,1,1>::get_public_inputs(), 1);
+                    p.witness, ManifestReader<component_type, ArithmetizationParams,1>::get_constants(),
+                    ManifestReader<component_type, ArithmetizationParams,1>::get_public_inputs(), 1);
 
                 // TACEO_TODO in the previous line I hardcoded 1 for now!!! CHANGE THAT
                 // TACEO_TODO make an assert that both have the same scale?

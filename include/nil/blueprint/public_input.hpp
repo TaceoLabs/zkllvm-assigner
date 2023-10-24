@@ -295,7 +295,6 @@ namespace nil {
                         llvm::errs() << "expect fixedpoints in tensor\n";
                         return false;
                     }
-                    //std::cout << "data[" << ptr << "] <- " << tensor_arr[i] << std::endl;
                     memory.store(ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
                 }
                 return true;
@@ -321,13 +320,11 @@ namespace nil {
                         return false;
                     }
                     //dimension
-                    std::cout << "storing " << dim_ptr << "<- "<< dim_arr[i].as_int64() << "\n";
                     assignmnt.public_input(0, public_input_idx) = dim_arr[i].as_int64(); 
                     memory.store(dim_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
 
                     //stride //WE MAYBE NEED TO SWAP THIS!
                     stride *= dim_arr[i].as_int64(); 
-                    std::cout << "storing " << stride_ptr << "<- "<< stride << "\n";
                     assignmnt.public_input(0, public_input_idx) = stride; 
                     memory.store(stride_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
                 }
@@ -420,8 +417,6 @@ namespace nil {
                     if (!try_om_tensor(current_tensor, t.as_object(), fp_size)) {
                         return false;
                     }
-                   //llvm::outs() << "Storing to "<< _omts_ptr << "<-";
-                   //std::cout << var_value(assignmnt, current_tensor).data << std::endl;
                     memory.store(_omts_ptr++, current_tensor);
                 }
                 //owning nothing to do for use
