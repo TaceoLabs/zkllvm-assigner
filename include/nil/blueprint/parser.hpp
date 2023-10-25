@@ -26,6 +26,14 @@
 #ifndef CRYPTO3_BLUEPRINT_COMPONENT_INSTRUCTION_PARSER_HPP
 #define CRYPTO3_BLUEPRINT_COMPONENT_INSTRUCTION_PARSER_HPP
 
+#define PRINT_VEC(X) {                   \
+        std::cout << "[";                \
+        for (auto i : X) {               \
+            std::cout << i << ", ";      \
+        } \
+        std::cout << "]" << std::endl;   \
+    }
+
 #include <variant>
 #include <stack>
 
@@ -50,6 +58,7 @@
 
 #include <nil/blueprint/logger.hpp>
 #include <nil/blueprint/layout_resolver.hpp>
+#include <nil/blueprint/onnx/runtime.hpp>
 #include <nil/blueprint/input_reader.hpp>
 #include <nil/blueprint/non_native_marshalling.hpp>
 #include <nil/blueprint/stack.hpp>
@@ -61,7 +70,15 @@
 #include <nil/blueprint/integers/bit_shift.hpp>
 #include <nil/blueprint/integers/bit_de_composition.hpp>
 
+#include <nil/blueprint/fixedpoint/addition.hpp>
+#include <nil/blueprint/fixedpoint/subtraction.hpp>
+#include <nil/blueprint/fixedpoint/mul_rescale.hpp>
+#include <nil/blueprint/fixedpoint/division.hpp>
+#include <nil/blueprint/fixedpoint/exp.hpp>
+
 #include <nil/blueprint/comparison/comparison.hpp>
+#include <nil/blueprint/comparison/f_comparison.hpp>
+
 #include <nil/blueprint/bitwise/and.hpp>
 #include <nil/blueprint/bitwise/or.hpp>
 #include <nil/blueprint/bitwise/xor.hpp>
@@ -89,11 +106,12 @@ namespace nil {
         template<typename BlueprintFieldType, typename ArithmetizationParams, bool PrintCircuitOutput>
         struct parser {
 
-            parser(long stack_size, bool detailed_logging, const std::string &kind = "") : stack_memory(stack_size) {
+            parser(long stack_size, bool detailed_logging, const std::string &kind = "") : stack_memory(stack_size), onnx_runtime(&assignmnt, &stack_memory, &public_input_idx){
                 if (detailed_logging) {
                     log.set_level(logger::level::DEBUG);
                 }
                 detail::PolicyManager::set_policy(kind);
+                
             }
 
             using ArithmetizationType =
@@ -102,6 +120,7 @@ namespace nil {
 
             circuit<ArithmetizationType> bp;
             assignment<ArithmetizationType> assignmnt;
+
 
         private:
 
@@ -249,8 +268,15 @@ namespace nil {
 
             std::vector<typename BlueprintFieldType::value_type> marshal_field_val(const llvm::Value *val) {
 
-                ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val));
-                if (llvm::isa<llvm::ConstantInt>(val)) {
+                ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val) || llvm::isa<llvm::ConstantFP>(val));
+                if (llvm::isa<llvm::ConstantFP>(val)) {
+                    //TACEO_TODO
+                    //just return 1 for debugging MNIST
+                    typename BlueprintFieldType::value_type field_constant = 1;
+                    return value_into_vector<BlueprintFieldType, BlueprintFieldType>(field_constant);
+
+                }
+                else if (llvm::isa<llvm::ConstantInt>(val)) {
                     return field_dependent_marshal_val<BlueprintFieldType>(val);
                 } else {
                     switch (llvm::cast<llvm::GaloisFieldType>(val->getType())->getFieldKind()) {
@@ -379,6 +405,7 @@ namespace nil {
                     ASSERT(stack_memory[dst].offset - stack_memory[dst - 1].offset ==
                             stack_memory[src].offset - stack_memory[src - 1].offset);
                     stack_memory[dst++].v = stack_memory[src++].v;
+
                 }
             }
 
@@ -482,26 +509,61 @@ namespace nil {
 
                         return true;
                     }
+                    case llvm::Intrinsic::exp: {
+                       //call to exp
+                       ASSERT(inst->getNumOperands() == 2);
+                       ASSERT(inst->getOperand(0)->getType()->isZkFixedPointTy());
+                       //ASSERT(inst->getOperand(1)->getType()->isZkFixedPointTy());
+                       handle_fixedpoint_exp_component<BlueprintFieldType, ArithmetizationParams>(
+                                   inst, frame, bp, assignmnt, start_row);
+                        return true;
+                    }
                     default:
                         UNREACHABLE("Unexpected intrinsic!");
                 }
                 return false;
             }
 
-            void handle_store(ptr_type ptr, const llvm::Value *val, stack_frame<var> & frame) {
-                stack_memory[ptr].v = frame.scalars[val];
+            void handle_store(ptr_type dst_ptr, const llvm::Value *val, stack_frame<var> & frame) {
+                size_t num_cells = layout_resolver->get_type_layout<BlueprintFieldType>(val->getType()).size();
+            auto size = layout_resolver->get_type_size(val->getType());
+                //we need a deep copy!!!!!!!
+                //This most likely is not 100% correct but it is better than before
+                if (num_cells == 1) {
+                    stack_memory[dst_ptr].v = frame.scalars[val];
+                } else {
+
+                    ptr_type src_ptr = resolve_number<ptr_type>(frame.scalars[val]);
+                    //memcpy(dst_ptr, resolve_number<ptr_type>(frame.scalars[val]), size);
+                   for (size_t i = 0;i<num_cells;++i) {
+                       stack_memory[dst_ptr + i].v = stack_memory[src_ptr + i].v;
+                   }
+                }
             }
 
-            void handle_load(ptr_type ptr, const llvm::Value *dest, stack_frame<var> &frame) {
-                auto &cell = stack_memory[ptr];
-                size_t num_cells = layout_resolver->get_type_layout<BlueprintFieldType>(dest->getType()).size();
-                if (num_cells == 1)
-                    frame.scalars[dest] = cell.v;
+            void handle_load(ptr_type src_ptr, const llvm::Value *val, stack_frame<var> &frame) {
+                size_t num_cells = layout_resolver->get_type_layout<BlueprintFieldType>(val->getType()).size();
+                auto size = layout_resolver->get_type_size(val->getType());
+                if (num_cells == 1) {
+                    frame.scalars[val] = stack_memory[src_ptr].v;
+                }
                 else {
-                    std::vector<var> res;
-                    for (size_t i = 0; i < num_cells; ++i) {
-                        res.push_back(stack_memory[ptr + i].v);
-                        frame.vectors[dest] = res;
+                    //TACEO_TODO Do we break something here now????
+                    if (val->getType()->isStructTy()) {
+                        //this add_cells can be better with the layout resolver but yeah...
+                        ptr_type dst_ptr = stack_memory.add_cells(std::vector<unsigned>(num_cells, 8));
+                        //memcpy(dst_ptr, src_ptr, size);
+                        for (size_t i=0;i<num_cells;++i) {
+                            stack_memory[dst_ptr + i].v = stack_memory[src_ptr + i].v;
+                        }
+                        assignmnt.public_input(0, public_input_idx) = dst_ptr;
+                        frame.scalars[val] = var(0, public_input_idx++, false, var::column_type::public_input);
+                    } else {
+                        std::vector<var> res; 
+                        for (size_t i = 0; i < num_cells; ++i) {
+                            res.push_back(stack_memory[src_ptr + i].v);
+                            frame.vectors[val] = res;
+                        }
                     }
                 }
             }
@@ -603,7 +665,13 @@ namespace nil {
                     }
                 } else if (auto addr = llvm::dyn_cast<llvm::BlockAddress>(c)) {
                     frame.scalars[c] = labels[addr->getBasicBlock()];
-                } else {
+                } else if (auto expr = llvm::dyn_cast<llvm::ConstantFP>(c)) {
+                    //TACEO_TODO
+                    //ALSO HERE STORE 1 FOR DEBUG
+                    assignmnt.public_input(0, public_input_idx) = 1;
+                    frame.scalars[c] = var(0, public_input_idx++, false, var::column_type::public_input);
+                } 
+                else {
                     // The only other known constant is an address of a function in CallInst,
                     // but there is no way to distinguish it
                     ASSERT(c->getType()->isPointerTy());
@@ -761,7 +829,6 @@ namespace nil {
                                 inst, frame, bp, assignmnt, start_row);
                             return inst->getNextNonDebugInstruction();
                         }
-
                         return inst->getNextNonDebugInstruction();
                     }
                     case llvm::Instruction::Call: {
@@ -779,9 +846,24 @@ namespace nil {
                             return inst->getNextNonDebugInstruction();
                         }
                         if (fun->empty()) {
-                            UNREACHABLE("Function " + fun_name.str() + " has no implementation.");
+                            //Try to handle with ONNXRuntime
+                            if (onnx_runtime.is_supported(fun)) {
+                                var ret_val;
+                                bool has_ret_val = onnx_runtime.handle_func_call(call_inst, fun, frame, ret_val);
+                                if (has_ret_val) {
+                                    variables[call_inst] = ret_val;
+                                }
+                                return inst->getNextNonDebugInstruction();
+                            } else {
+                                UNREACHABLE("Function " + fun_name.str() + " has no implementation.");
+                            }
                         }
                         stack_frame<var> new_frame;
+                        if (fun->getReturnType()->isAggregateType()) {
+                            new_frame.ret_ptr = stack_memory.add_cells(layout_resolver->get_type_layout<BlueprintFieldType>(fun->getReturnType()));
+                        } else {
+                            new_frame.ret_ptr = 0;
+                        }
                         auto &new_variables = new_frame.scalars;
                         for (int i = 0; i < fun->arg_size(); ++i) {
                             llvm::Argument *arg = fun->getArg(i);
@@ -790,8 +872,10 @@ namespace nil {
                                 (arg->getType()->isFieldTy() && field_arg_num<BlueprintFieldType>(arg_type) > 1)) {
                                 new_frame.vectors[arg] = frame.vectors[call_inst->getOperand(i)];
                             }
-                            else
+                            else {
                                 new_variables[arg] = variables[call_inst->getOperand(i)];
+                            }
+                            
 
                         }
                         new_frame.caller = call_inst;
@@ -957,7 +1041,6 @@ namespace nil {
                     case llvm::Instruction::Alloca: {
                         auto *alloca = llvm::cast<llvm::AllocaInst>(inst);
                         auto vec = layout_resolver->get_type_layout<BlueprintFieldType>(alloca->getAllocatedType());
-
                         ptr_type res_ptr = stack_memory.add_cells(vec);
                         log.debug("Alloca: {}", res_ptr);
                         frame.scalars[inst] = put_into_assignment(res_ptr);
@@ -996,6 +1079,7 @@ namespace nil {
                         ptr_type ptr = resolve_number<ptr_type>(frame, insert_inst->getAggregateOperand());
                         ptr += layout_resolver->get_flat_index<BlueprintFieldType>(
                             insert_inst->getAggregateOperand()->getType(), insert_inst->getIndices());
+                        
                         stack_memory.store(ptr, frame.scalars[insert_inst->getInsertedValueOperand()]);
                         frame.scalars[inst] = frame.scalars[insert_inst->getAggregateOperand()];
                         return inst->getNextNonDebugInstruction();
@@ -1003,8 +1087,9 @@ namespace nil {
                     case llvm::Instruction::ExtractValue: {
                         auto *extract_inst = llvm::cast<llvm::ExtractValueInst>(inst);
                         ptr_type ptr = resolve_number<ptr_type>(frame, extract_inst->getAggregateOperand());
-                        ptr += layout_resolver->get_flat_index<BlueprintFieldType>(
+                        auto offset = layout_resolver->get_flat_index<BlueprintFieldType>(
                             extract_inst->getAggregateOperand()->getType(), extract_inst->getIndices());
+                        ptr += offset;
                         frame.scalars[inst] = stack_memory.load(ptr);
                         return inst->getNextNonDebugInstruction();
                     }
@@ -1056,6 +1141,29 @@ namespace nil {
                                     llvm::Value *ret_val = inst->getOperand(0);
                                     if (ret_val->getType()->isPointerTy()) {
                                         // TODO(maksenov): support printing complex results
+                                        // TACEO_TODO we hardcode the printing of the tensor list
+                                        // we need something better here
+
+                                        ptr_type om_tensor_list_ptr = resolve_number<ptr_type>(extracted_frame, ret_val);
+                                        //get _omts
+                                        //get size 
+                                        ptr_type _omts = resolve_number<ptr_type>(stack_memory.load(om_tensor_list_ptr));
+                                        unsigned size = resolve_number<unsigned>(stack_memory.load(om_tensor_list_ptr + 1));
+                                        for (unsigned i=0;i<size;++i) {
+                                            //get pointer to tensor struct 
+                                            ptr_type _struct_ptr = resolve_number<ptr_type>(stack_memory.load(_omts + (i * 8)));
+                                            //TACEO_TODO for now only iterate over 10 -> we need to iterate over data size which is
+                                            //dim.reduce(|a,b| a + b)
+                                            // get pointer to tensor data
+                                            ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr));
+                                            ptr_type _aligned_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr+1));
+                                            std::cout << "[";
+                                            for (unsigned j=0;j<10;++j) {
+                                                std::cout << var_value(assignmnt, stack_memory.load(_data_ptr + j)).data << ", ";
+                                            }
+                                            std::cout << "]" << std::endl;
+                                        }
+
                                     } else if (ret_val->getType()->isVectorTy()) {
                                         std::vector<var> res = extracted_frame.vectors[ret_val];
                                         for (var x : res) {
@@ -1099,7 +1207,30 @@ namespace nil {
                                             std::cout << unmarshal_field_val(ret_field_type, chopped_field_y) << std::endl;
 
                                         }
-                                    } else {
+                                    } else if (ret_val->getType()->isZkFixedPointTy()) {
+                                        //TODO_TACEO Check if we need to handle other field types or
+                                        //is var_value enough???? I don't think at the moment
+                                        //because we always use var() during parsing but
+                                        //maybe later?
+                                        if (field_arg_num<BlueprintFieldType>(ret_val->getType()) > 1) {
+                                            UNREACHABLE("not possible at the moment (maybe later?)");
+                                        }
+                                        //auto test = var_value(assignmnt, extracted_frame.scalars[ret_val]).data;
+                                        //TACEO_TODO This is copied from Roman's helper
+                                        //TACEO_TODO remove this as soon as we have seperate lib
+                                        typename BlueprintFieldType::value_type P_HALF = BlueprintFieldType::modulus / 2;
+                                        typename BlueprintFieldType::value_type field = var_value(assignmnt, extracted_frame.scalars[ret_val]).data;
+                                        bool is_negative = field > P_HALF;
+                                        if (is_negative) {
+                                            field = -field;
+                                            std::cout << "-";
+                                        }
+                                        //we cannot use llvm::outs here
+                                        std::cout << field << std::endl;
+                                        std::cout << "^_________________________________" << std::endl;
+                                        std::cout << "at the moment you have to divide | this number with 65536 (2^16) to get the result" << std::endl;
+                                    }
+                                    else {
                                         std::cout << var_value(assignmnt, extracted_frame.scalars[ret_val]).data << std::endl;
                                     }
                                 }
@@ -1117,16 +1248,12 @@ namespace nil {
                                 upper_frame_vectors[extracted_frame.caller] = res;
                             } else if (ret_type->isAggregateType()) {
                                 ptr_type ret_ptr = resolve_number<ptr_type>(extracted_frame, ret_val);
-                                ptr_type allocated_copy = stack_memory.add_cells(
-                                    layout_resolver->get_type_layout<BlueprintFieldType>(ret_type));
                                 auto size = layout_resolver->get_type_size(ret_type);
-                                // TODO(maksenov): check if overwriting is possible here
-                                //                 (looks like it is not)
-                                memcpy(allocated_copy, ret_ptr, size);
+                                memcpy(extracted_frame.ret_ptr, ret_ptr, size);
                                 auto &upper_frame_variables = call_stack.top().scalars;
 
                                 upper_frame_variables[extracted_frame.caller] = extracted_frame.scalars[ret_val];
-                                upper_frame_variables[extracted_frame.caller] = put_into_assignment(allocated_copy);
+                                upper_frame_variables[extracted_frame.caller] = put_into_assignment(extracted_frame.ret_ptr);
                             } else {
                                 auto &upper_frame_variables = call_stack.top().scalars;
                                 upper_frame_variables[extracted_frame.caller] = extracted_frame.scalars[ret_val];
@@ -1136,31 +1263,68 @@ namespace nil {
                     }
                                                  
                     case llvm::Instruction::FAdd: {
-
                         if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
                             inst->getOperand(1)->getType()->isZkFixedPointTy()) {
-                            llvm::outs()  << "I got fadd with fixed points :)))) uwu\n";
-                            exit(0);
-                           //handle_integer_addition_component<BlueprintFieldType, ArithmetizationParams>(
-                           //            inst, frame, bp, assignmnt, start_row);
+
+                            handle_fixedpoint_addition_component<BlueprintFieldType, ArithmetizationParams>(
+                                       inst, frame, bp, assignmnt, start_row);
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
                         }
-//
-//                       if (inst->getOperand(0)->getType()->isFieldTy() && inst->getOperand(1)->getType()->isFieldTy()) {
-//                           handle_field_addition_component<BlueprintFieldType, ArithmetizationParams>(
-//                                       inst, frame, bp, assignmnt, start_row);
-//                           return inst->getNextNonDebugInstruction();
-//                       } else if (inst->getOperand(0)->getType()->isCurveTy() && inst->getOperand(1)->getType()->isCurveTy()) {
-//                           handle_curve_addition_component<BlueprintFieldType, ArithmetizationParams>(
-//                                       inst, frame, bp, assignmnt, start_row);
-//                           return inst->getNextNonDebugInstruction();
-//                       } else {
-//                           UNREACHABLE("curve + scalar is undefined");
-//                       }
-//
-//                       return inst->getNextNonDebugInstruction();
+                    }
+                    case llvm::Instruction::FSub: {
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+
+                            handle_fixedpoint_subtraction_component<BlueprintFieldType, ArithmetizationParams>(
+                                       inst, frame, bp, assignmnt, start_row);
+                            return inst->getNextNonDebugInstruction();
+                        } else {
+                            UNREACHABLE("can only fadd with fixed points");
+                        }
+                    }
+                    case llvm::Instruction::FMul: {
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+
+                           handle_fixedpoint_mul_rescale_component<BlueprintFieldType, ArithmetizationParams>(
+                                      inst, frame, bp, assignmnt, start_row);
+                            return inst->getNextNonDebugInstruction();
+                        } else {
+                            UNREACHABLE("can only fadd with fixed points");
+                        }
+                    }
+                    case llvm::Instruction::FDiv: {
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+
+                           handle_fixedpoint_division_component<BlueprintFieldType, ArithmetizationParams>(
+                                      inst, frame, bp, assignmnt, start_row);
+                            return inst->getNextNonDebugInstruction();
+                        } else {
+                            UNREACHABLE("can only fadd with fixed points");
+                        }
+                    }
+                    case llvm::Instruction::FCmp: {
+                        auto fcmp_inst = llvm::cast<const llvm::FCmpInst>(inst);
+                        if (inst->getOperand(0)->getType()->isZkFixedPointTy() &&
+                            inst->getOperand(1)->getType()->isZkFixedPointTy()) {
+                            const var &lhs = variables[inst->getOperand(0)];
+                            const var &rhs = variables[inst->getOperand(1)];
+
+                            auto *lhs_type = llvm::cast<llvm::ZkFixedPointType>(inst->getOperand(0)->getType());
+                            auto *rhs_type = llvm::cast<llvm::ZkFixedPointType>(inst->getOperand(1)->getType());
+                            ASSERT(lhs_type->getBitWidth() == rhs_type->getBitWidth());
+
+                            std::size_t bitness = lhs_type->getBitWidth();
+                            variables[inst] = handle_f_comparison_component<BlueprintFieldType, ArithmetizationParams>(
+                            fcmp_inst->getPredicate(), lhs, rhs, bitness,
+                            bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+                            return inst->getNextNonDebugInstruction();
+                         } else {
+                             UNREACHABLE("can only fcmp with fixed points");
+                         }
                    }
 
                     default:
@@ -1169,6 +1333,7 @@ namespace nil {
                 return nullptr;
             }
 
+            
         public:
             std::unique_ptr<llvm::Module> parseIRFile(const char *ir_file) {
                 llvm::SMDiagnostic diagnostic;
@@ -1216,7 +1381,6 @@ namespace nil {
                 call_stack.emplace(std::move(base_frame));
 
                 for (const llvm::GlobalVariable &global : module.getGlobalList()) {
-
                     const llvm::Constant *initializer = global.getInitializer();
                     if (initializer->getType()->isAggregateType()) {
                         ptr_type ptr = store_constant<var>(initializer);
@@ -1294,6 +1458,7 @@ namespace nil {
             bool finished = false;
             size_t public_input_idx = 0;
             std::unique_ptr<LayoutResolver> layout_resolver;
+            onnx::runtime<BlueprintFieldType, ArithmetizationType> onnx_runtime;
             var undef_var;
             var zero_var;
             logger log;

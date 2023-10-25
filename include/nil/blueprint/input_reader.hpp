@@ -31,13 +31,13 @@
 #include "llvm/IR/Type.h"
 
 #include <nil/blueprint/layout_resolver.hpp>
+#include <nil/blueprint/onnx/runtime.hpp>
 
 #include <nil/blueprint/stack.hpp>
 #include <nil/blueprint/non_native_marshalling.hpp>
 
 #include <iostream>
 #include <boost/json/src.hpp>
-
 
 #define DELTA_FIX_1616 (1ULL << 16)
 
@@ -79,7 +79,6 @@ namespace nil {
                 }
                 return true;
             }
-
 
             bool parse_scalar(const boost::json::value &value, typename BlueprintFieldType::value_type &out) {
                 const std::size_t buflen = 256;
@@ -234,6 +233,30 @@ namespace nil {
                 return true;
             }
 
+            std::vector<var> process_fixedpoint(llvm::ZkFixedPointType *fixedpoint_type, const boost::json::object &value) {
+                ASSERT(value.size() == 1 && value.contains("zk-fixedpoint"));
+                std::vector<var> res;
+                if (!parse_fixedpoint(value.at("zk-fixedpoint"), assignmnt.public_input(0, public_input_idx))) {
+                    return {};
+                }
+                res.push_back(var(0, public_input_idx++, false, var::column_type::public_input));
+                return res;
+            }
+
+            bool take_fixedpoint(llvm::Value *fixedpoint_arg, llvm::Type *fixedpoint_type, const boost::json::object &value) {
+                if (!fixedpoint_type->isZkFixedPointTy()) {
+                    return false;
+                }
+                if (value.size() != 1 || !value.contains("zk-fixedpoint") || !value.at("zk-fixedpoint").is_double()) {
+                    return false;
+                }
+                auto values = process_fixedpoint(llvm::cast<llvm::ZkFixedPointType>(fixedpoint_type), value);
+                if (values.size() != 1)
+                    return false;
+                frame.scalars[fixedpoint_arg] = values[0];
+                return true;
+            }
+
             std::vector<var> process_int(const boost::json::object &object, std::size_t bitness, bool is_private) {
                 ASSERT(object.size() == 1 && object.contains("int"));
                 std::vector<var> res = std::vector<var>(1);
@@ -306,31 +329,6 @@ namespace nil {
                 return true;
             }
 
-            std::vector<var> process_fixedpoint(llvm::ZkFixedPointType *fixedpoint_type, const boost::json::object &value) {
-                ASSERT(value.size() == 1 && value.contains("zk-fixedpoint"));
-                std::vector<var> res;
-                if (!parse_fixedpoint(value.at("zk-fixedpoint"), assignmnt.public_input(0, public_input_idx))) {
-                    return {};
-                }
-                res.push_back(var(0, public_input_idx++, false, var::column_type::public_input));
-                return res;
-            }
-
-            bool take_fixedpoint(llvm::Value *fixedpoint_arg, llvm::Type *fixedpoint_type, const boost::json::object &value) {
-                if (!fixedpoint_type->isZkFixedPointTy()) {
-                    return false;
-                }
-                if (value.size() != 1 || !value.contains("zk-fixedpoint") || !value.at("zk-fixedpoint").is_double()) {
-                    return false;
-                }
-                auto values = process_fixedpoint(llvm::cast<llvm::ZkFixedPointType>(fixedpoint_type), value);
-                if (values.size() != 1)
-                    return false;
-                frame.scalars[fixedpoint_arg] = values[0];
-                return true;
-            }
-
-
             bool take_vector(llvm::Value *vector_arg, llvm::Type *vector_type, const boost::json::object &value, bool is_private) {
                 size_t arg_len = llvm::cast<llvm::FixedVectorType>(vector_type)->getNumElements();
                 if (value.size() != 1 && !value.contains("vector")) {
@@ -340,11 +338,150 @@ namespace nil {
                 return frame.vectors[vector_arg].size() > 0;
             }
 
+            bool parse_tensor_data(var& data_ptr, const boost::json::array &tensor_arr, size_t element_offset) {
+                ptr_type ptr = memory.add_cells(std::vector<unsigned>(tensor_arr.size(), element_offset));
+                assignmnt.public_input(0, public_input_idx) = ptr;
+                data_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+
+                for (size_t i = 0; i < tensor_arr.size(); ++i) {
+                    if (!parse_fixedpoint(tensor_arr[i], assignmnt.public_input(0, public_input_idx))) {
+                        llvm::errs() << "expect fixedpoints in tensor\n";
+                        return false;
+                    }
+                    memory.store(ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+                }
+                return true;
+            }
+
+            bool parse_dim_array(var& var_dim_ptr, var& var_stride_ptr, const boost::json::array &dim_arr, size_t element_offset) {
+                if (dim_arr.size() == 0) {
+                    //empty array
+                    return false;
+                }
+                //dimensions 
+                ptr_type dim_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), element_offset));
+                assignmnt.public_input(0, public_input_idx) = dim_ptr;
+                var_dim_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+                //strides
+                ptr_type stride_ptr = memory.add_cells(std::vector<unsigned>(dim_arr.size(), element_offset));
+                assignmnt.public_input(0, public_input_idx) = stride_ptr;
+                var_stride_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+                unsigned stride = 1;
+                for (size_t i = 0; i < dim_arr.size(); ++i) {
+                    if (dim_arr[i].kind() != boost::json::kind::int64 || dim_arr[i].as_int64() <= 0) {
+                        llvm::errs() << "expect unsigned ints for tensor dimensions >0\n";
+                        return false;
+                    }
+                    //dimension
+                    assignmnt.public_input(0, public_input_idx) = dim_arr[i].as_int64(); 
+                    memory.store(dim_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+
+                    //stride //WE MAYBE NEED TO SWAP THIS!
+                    stride *= dim_arr[i].as_int64(); 
+                    assignmnt.public_input(0, public_input_idx) = stride; 
+                    memory.store(stride_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+                }
+                return true;
+            }
+
+            bool try_om_tensor(var& om_tensor_ptr, const boost::json::object &value, size_t element_offset) {
+                if (value.size() != 2 || !value.contains("data") || !value.contains("dim")) {
+                    return false;
+                }
+                if (!value.at("data").is_array() || !value.at("dim").is_array()) {
+                    return false;
+                }
+
+                var data_ptr;
+                if (!parse_tensor_data(data_ptr, value.at("data").as_array(), element_offset)) {
+                    return false;
+                }
+                var dim_ptr;
+                var strides_ptr;
+                if (!parse_dim_array(dim_ptr, strides_ptr, value.at("dim").as_array(), element_offset)) {
+                    return false;
+                }
+
+                assignmnt.public_input(0, public_input_idx) = value.at("dim").as_array().size();
+                var tensor_rank = var(0, public_input_idx++, false, var::column_type::public_input);
+
+                //hardcoded to one for the moment (float)
+                assignmnt.public_input(0, public_input_idx) = 1;
+                var data_type = var(0, public_input_idx++, false, var::column_type::public_input);
+                //build the struct:
+                //   void *_allocatedPtr;    -> data
+                //   void *_alignedPtr;      -> TACEO_TODO do we need two pointers?
+                //   int64_t _offset;        -> never used
+                //   int64_t *_shape;        -> shape array
+                //   int64_t *_strides;      -> strides array
+                //   int64_t _rank;          -> rank
+                //   OM_DATA_TYPE _dataType; -> ONNX data type
+                //   int64_t _owning;        -> not used by us
+                ptr_type ptr = memory.add_cells(std::vector<unsigned>(onnx::om_tensor_size, element_offset));
+                assignmnt.public_input(0, public_input_idx) = ptr;
+                om_tensor_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
+
+                //TACEO_TODO Lets check if we need to store something at the empty places 
+                memory.store(ptr++, data_ptr);     // _allocatedPtr; 
+                memory.store(ptr++, data_ptr);     // _alignedPtr;   
+                ptr++;                             // _offset not used so leave it be;   
+                memory.store(ptr++, dim_ptr);      // _shape 
+                memory.store(ptr++, strides_ptr);  // _strides 
+                memory.store(ptr++, tensor_rank);  // _rank
+                memory.store(ptr++, data_type);    // _dataType
+                ptr++;                             // _owning
+                
+                return true;
+            }
+
+            bool try_om_tensor_list(llvm::Value *arg, llvm::Type *arg_type, const boost::json::object &value) {
+                if (!arg_type->isPointerTy()) {
+                    return false;
+                }
+                if (!value.contains("tensor_list") || !value.at("tensor_list").is_array()) {
+                    return false;
+                }
+                //TACEO_TODO this is a little bit hacky as we abuse the fact that ptr type is same
+                //size as fixed point. Maybe think of something better
+                size_t fp_size = layout_resolver.get_type_size(arg_type);
+                // build the struct:
+                //   OMTensor **_omts; // OMTensor array
+                //   int64_t _size;    // Number of elements in _omts.
+                //   int64_t _owning;  // not used by us
+                ptr_type om_tensor_list_ptr = memory.add_cells(std::vector<unsigned>(onnx::om_tensor_list_size, fp_size));
+                assignmnt.public_input(0, public_input_idx) = om_tensor_list_ptr;
+                frame.scalars[arg] = var(0, public_input_idx++, false, var::column_type::public_input);
+
+                auto json_arr = value.at("tensor_list").as_array();
+                //store pointer to tensor list (_omts)
+                ptr_type _omts_ptr = memory.add_cells(std::vector<unsigned>(json_arr.size(), fp_size));
+                assignmnt.public_input(0, public_input_idx) = _omts_ptr;
+                memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+                //store _size
+                assignmnt.public_input(0, public_input_idx) = json_arr.size();
+                memory.store(om_tensor_list_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
+
+                //parse the tensors
+                for (auto t: json_arr) {
+                    if (t.kind() != boost::json::kind::object) {
+                        return false;
+                    }
+                    var current_tensor;
+                    if (!try_om_tensor(current_tensor, t.as_object(), fp_size)) {
+                        return false;
+                    }
+                    memory.store(_omts_ptr++, current_tensor);
+                }
+                //owning nothing to do for use
+                om_tensor_list_ptr++;
+                return true;
+            }
+
             bool try_string(llvm::Value *arg, llvm::Type *arg_type, const boost::json::object &value, bool is_private) {
                 if (!arg_type->isPointerTy()) {
                     return false;
                 }
-                if (value.size() != 1 && !value.contains("string")) {
+                if (value.size() != 1 || !value.contains("string")) {
                     return false;
                 }
                 if (!value.at("string").is_string()) {
@@ -363,7 +500,6 @@ namespace nil {
                 typename BlueprintFieldType::value_type zero_val = 0;
                 auto final_zero = put_into_assignment(zero_val, is_private);
                 memory.store(ptr++, final_zero);
-
                 return true;
             }
 
@@ -500,7 +636,7 @@ namespace nil {
                                 UNREACHABLE("unsupported pointer type");
                             }
                         }
-                        if (!try_string(current_arg, arg_type, current_value, is_private)) {
+                        if (!try_string(current_arg, arg_type, current_value, is_private) && !try_om_tensor_list(current_arg, arg_type, current_value)) {
                             std::cerr << "Unhandled pointer argument" << std::endl;
                             return false;
                         }

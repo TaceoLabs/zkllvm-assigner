@@ -27,6 +27,7 @@
 #ifndef CRYPTO3_ASSIGNER_MEMORY_HPP
 #define CRYPTO3_ASSIGNER_MEMORY_HPP
 
+#include <cstddef>
 #include <unordered_map>
 #include <vector>
 #include <stack>
@@ -53,6 +54,7 @@ namespace nil {
                 // to easily compute a size of a cell as a difference with the previous one
                 this->push_back({VarType(), 0});
                 this->resize(heap_top);
+                this->back().offset = heap_top;
                 push_frame();
             }
             void stack_push(unsigned offset) {
@@ -81,6 +83,11 @@ namespace nil {
             }
 
             ptr_type malloc(size_t num_bytes) {
+                // pad malloc size to multiple of alignof(std::max_align_t)
+                constexpr auto alignment = alignof(std::max_align_t);
+                num_bytes += alignment -1;
+                num_bytes = (num_bytes / alignment) * alignment;
+
                 auto offset = this->back().offset;
                 ptr_type res = this->size();
                 for (size_t i = 0; i < num_bytes; ++i) {
@@ -108,7 +115,7 @@ namespace nil {
                 if (offset < stack_size) {
                     right = left + stack_top;
                 } else {
-                    left = left + stack_size;
+                    left = left + stack_size - 1;
                 }
                 auto res = std::lower_bound(
                     left, right, offset, [](const cell<VarType> &cell, size_t offset) { return cell.offset < offset; });
@@ -116,7 +123,11 @@ namespace nil {
                     return 0;
                 }
                 // The operation is inverse to ptrtoint, so we need to add 1 to get the desired ptr
-                return res - left + 1;
+                if (offset < stack_size) {
+                    return res - left + 1;
+                } else {
+                    return res - left + 1 + stack_size - 1;
+                }
             }
 
         private:

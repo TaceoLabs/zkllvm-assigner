@@ -51,10 +51,10 @@ namespace nil {
                                                                                                 std::numeric_limits<std::int32_t>::max(), true);
             };
 
-            template<typename ComponentType, typename ArithmetizationParams>
+            template<typename ComponentType, typename ArithmetizationParams, uint8_t... manifest_args>
             struct ManifestReader {
                 inline static typename ComponentType::manifest_type manifest =
-                        CompilerRestrictions<ArithmetizationParams>::common_restriction_manifest.intersect(ComponentType::get_manifest());
+                        CompilerRestrictions<ArithmetizationParams>::common_restriction_manifest.intersect(ComponentType::get_manifest(manifest_args...));
 
                 template<typename... Args>
                 static std::vector <std::pair<std::uint32_t, std::uint32_t>>
@@ -87,6 +87,7 @@ namespace nil {
                     return public_inputs;
                 }
             };
+
         }    // namespace detail
     }    // namespace blueprint
 }    // namespace nil
