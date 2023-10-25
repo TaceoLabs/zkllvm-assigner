@@ -80,27 +80,6 @@ namespace nil {
                 return true;
             }
 
-
-
-            bool parse_fixedpoint(const boost::json::value &value, typename BlueprintFieldType::value_type &out) {
-                //for now only double, but later we most likely will need strings as well
-                //we hardcode the scale with 2^16 for now. Let's see later down the line
-                double d;
-                if (value.kind() == boost::json::kind::double_) {
-                    d = value.as_double();
-                } else {
-                    UNREACHABLE("TODO add string support");
-                }
-                if (d < 0) {
-                    out = static_cast<int64_t>(-d * DELTA_FIX_1616);
-                    out = -out;
-                } else {
-                    out = static_cast<int64_t>(d * DELTA_FIX_1616);
-                }
-                return true;
-            }
-
-
             bool parse_scalar(const boost::json::value &value, typename BlueprintFieldType::value_type &out) {
                 const std::size_t buflen = 256;
                 char buf[buflen];
@@ -305,7 +284,6 @@ namespace nil {
                         "got double value for int argument. Probably the value is too big to be represented as "
                         "integer. You can put it in \"\" to avoid JSON parser restrictions.";
                     UNREACHABLE(error);
->>>>>>> dev:include/nil/blueprint/input_reader.hpp
                 }
                 case boost::json::kind::string: {
                     const std::size_t buflen = 256;
@@ -350,31 +328,6 @@ namespace nil {
                 frame.scalars[int_arg] = values[0];
                 return true;
             }
-
-            std::vector<var> process_fixedpoint(llvm::ZkFixedPointType *fixedpoint_type, const boost::json::object &value) {
-                ASSERT(value.size() == 1 && value.contains("zk-fixedpoint"));
-                std::vector<var> res;
-                if (!parse_fixedpoint(value.at("zk-fixedpoint"), assignmnt.public_input(0, public_input_idx))) {
-                    return {};
-                }
-                res.push_back(var(0, public_input_idx++, false, var::column_type::public_input));
-                return res;
-            }
-
-            bool take_fixedpoint(llvm::Value *fixedpoint_arg, llvm::Type *fixedpoint_type, const boost::json::object &value) {
-                if (!fixedpoint_type->isZkFixedPointTy()) {
-                    return false;
-                }
-                if (value.size() != 1 || !value.contains("zk-fixedpoint") || !value.at("zk-fixedpoint").is_double()) {
-                    return false;
-                }
-                auto values = process_fixedpoint(llvm::cast<llvm::ZkFixedPointType>(fixedpoint_type), value);
-                if (values.size() != 1)
-                    return false;
-                frame.scalars[fixedpoint_arg] = values[0];
-                return true;
-            }
-
 
             bool take_vector(llvm::Value *vector_arg, llvm::Type *vector_type, const boost::json::object &value, bool is_private) {
                 size_t arg_len = llvm::cast<llvm::FixedVectorType>(vector_type)->getNumElements();
@@ -698,9 +651,6 @@ namespace nil {
                             return false;
                     } else if (llvm::isa<llvm::IntegerType>(arg_type)) {
                         if (!take_int(current_arg, current_value, is_private))
-                            return false;
-                    } else if (llvm::isa<llvm::ZkFixedPointType>(arg_type)) {
-                        if (!take_fixedpoint(current_arg, arg_type, current_value))
                             return false;
                     } else if (llvm::isa<llvm::ZkFixedPointType>(arg_type)) {
                         if (!take_fixedpoint(current_arg, arg_type, current_value))
