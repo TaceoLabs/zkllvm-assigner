@@ -33,7 +33,6 @@
         } \
         std::cout << "]" << std::endl;   \
     }
-
 #include <variant>
 #include <stack>
 
@@ -42,6 +41,7 @@
 #include <nil/blueprint/components/hashes/poseidon/plonk/poseidon.hpp>
 #include <nil/blueprint/components/hashes/sha2/plonk/sha256.hpp>
 #include <nil/blueprint/components/hashes/sha2/plonk/sha512.hpp>
+
 
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/IR/LLVMContext.h>
@@ -70,6 +70,7 @@
 #include <nil/blueprint/integers/bit_shift.hpp>
 #include <nil/blueprint/integers/bit_de_composition.hpp>
 
+#include <nil/blueprint/components/algebra/fixedpoint/type.hpp>
 #include <nil/blueprint/fixedpoint/addition.hpp>
 #include <nil/blueprint/fixedpoint/subtraction.hpp>
 #include <nil/blueprint/fixedpoint/mul_rescale.hpp>
@@ -105,6 +106,7 @@ namespace nil {
 
         template<typename BlueprintFieldType, typename ArithmetizationParams, bool PrintCircuitOutput>
         struct parser {
+            static constexpr unsigned long long DELTA = 1ULL << 16;
 
             parser(long stack_size, bool detailed_logging, const std::string &kind = "") : stack_memory(stack_size), onnx_runtime(&assignmnt, &stack_memory, &public_input_idx){
                 if (detailed_logging) {
@@ -123,6 +125,8 @@ namespace nil {
 
 
         private:
+
+
 
             template<typename map_type>
             void handle_scalar_cmp(const llvm::ICmpInst *inst, map_type &variables) {
@@ -243,6 +247,30 @@ namespace nil {
             }
 
             template<typename FieldType>
+                std::vector<typename BlueprintFieldType::value_type> field_dependent_marshal_fixedpoint(const llvm::ConstantFP* val) {
+                    auto float_value = val->getValue();
+                    ASSERT(&float_value.getSemantics() == &llvm::APFloat::IEEEdouble());
+                    double d;
+                    if (float_value.isNegInfinity()) {
+                        d = -10000.0;
+                        llvm::outs() << "negative infinity\n";
+                        llvm::outs() << d << "\n";
+                    } else if (float_value.isPosInfinity()) {
+                        d = DELTA - 1;
+                        llvm::outs() << "positive infinity\n";
+                    } else {
+                        d = float_value.convertToDouble();
+                    }
+                    typename FieldType::value_type field_constant;
+                    if (d < 0) {
+                        field_constant = -typename BlueprintFieldType::value_type(static_cast<int64_t>(-d * DELTA));
+                    } else {
+                        field_constant = static_cast<int64_t>(d * DELTA);
+                    }
+                    return value_into_vector<BlueprintFieldType, FieldType>(field_constant);
+                }
+
+            template<typename FieldType>
             std::vector<typename BlueprintFieldType::value_type> field_dependent_marshal_val(const llvm::Value *val) {
                 ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val));
                 llvm::APInt int_val;
@@ -270,19 +298,12 @@ namespace nil {
 
                 ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val) || llvm::isa<llvm::ConstantFP>(val));
                 if (llvm::isa<llvm::ConstantFP>(val)) {
-                    llvm::ConstantFP* fp_constant = llvm::cast<llvm::ConstantFP>(val);
+                    const llvm::ConstantFP* fp_constant = llvm::cast<llvm::ConstantFP>(val);
                     if (fp_constant->getType()->isZkFixedPointTy()) {
-                        std::cout << "LETS GOOOO" << std::endl;
-                        typename BlueprintFieldType::value_type field_constant = 1;
-                        return value_into_vector<BlueprintFieldType, BlueprintFieldType>(field_constant);
+                        return field_dependent_marshal_fixedpoint<BlueprintFieldType>(fp_constant);
                     } else {
                         UNREACHABLE("unsupported floating point constant, only fixed point supported");
                     }
-                    //TACEO_TODO
-                    //just return 1 for debugging MNIST
-                    typename BlueprintFieldType::value_type field_constant = 1;
-                    return value_into_vector<BlueprintFieldType, BlueprintFieldType>(field_constant);
-
                 }
                 else if (llvm::isa<llvm::ConstantInt>(val)) {
                     return field_dependent_marshal_val<BlueprintFieldType>(val);
@@ -348,6 +369,10 @@ namespace nil {
 
             template<typename VarType>
             ptr_type store_constant(const llvm::Constant *constant_init) {
+                if (llvm::isa<llvm::ConstantFP>(constant_init)) {
+                    std::cout << "uwu\n";
+                    exit(0);
+                }
                 if (auto operation = llvm::dyn_cast<llvm::ConstantExpr>(constant_init)) {
                     if (operation->isCast())
                         constant_init = operation->getOperand(0);
@@ -524,7 +549,13 @@ namespace nil {
                        //ASSERT(inst->getOperand(1)->getType()->isZkFixedPointTy());
                        handle_fixedpoint_exp_component<BlueprintFieldType, ArithmetizationParams>(
                                    inst, frame, bp, assignmnt, start_row);
-                        return true;
+                       const var &lhs = frame.scalars[inst->getOperand(0)];
+                       components::FixedPoint<BlueprintFieldType,1,1> test(var_value(assignmnt, lhs), 16);
+                       llvm::outs() << "==================\n";
+                       llvm::outs() << *inst << "\n";
+                       std::cout << "e^" << test.to_double() << "\n";
+                       std::cout << var_value(assignmnt, frame.scalars[inst]).data << "\n";
+                       return true;
                     }
                     default:
                         UNREACHABLE("Unexpected intrinsic!");
@@ -624,6 +655,23 @@ namespace nil {
                             frame.vectors[c].push_back(put_into_assignment(marshalled_field_val[i]));
                         }
                     }
+                    //TACEO_TODO maybe write macro to deduplicate code
+                } else if (llvm::isa<llvm::ConstantFP>(c)) {
+                    const llvm::ConstantFP* fp_constant = llvm::cast<llvm::ConstantFP>(c);
+                    if (fp_constant->getType()->isZkFixedPointTy()) {
+                        std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = field_dependent_marshal_fixedpoint<BlueprintFieldType>(fp_constant);
+                        if (marshalled_field_val.size() == 1) {
+                            frame.scalars[c] = put_into_assignment(marshalled_field_val[0]);
+                        }
+                        else {
+                            frame.vectors[c] = {};
+                            for (std::size_t i = 0; i < marshalled_field_val.size(); i++) {
+                                frame.vectors[c].push_back(put_into_assignment(marshalled_field_val[i]));
+                            }
+                        }
+                    } else {
+                        UNREACHABLE("unsupported floating point constant, only fixed point supported");
+                    }
                 } else if (llvm::isa<llvm::UndefValue>(c)) {
                     llvm::Type *undef_type = c->getType();
                     if (undef_type->isIntegerTy() || undef_type->isFieldTy()) {
@@ -673,15 +721,7 @@ namespace nil {
                     }
                 } else if (auto addr = llvm::dyn_cast<llvm::BlockAddress>(c)) {
                     frame.scalars[c] = labels[addr->getBasicBlock()];
-                } else if (auto expr = llvm::dyn_cast<llvm::ConstantFP>(c)) {
-                    if (expr->getType()->isZkFixedPointTy()) {
-                        std::cout << "LETS GOOOO" << std::endl;
-                        assignmnt.public_input(0, public_input_idx) = 1;
-                        frame.scalars[c] = var(0, public_input_idx++, false, var::column_type::public_input);
-                    } else {
-                        UNREACHABLE("unsupported floating point constant, only fixed point supported");
-                    }
-                } 
+                }  
                 else {
                     // The only other known constant is an address of a function in CallInst,
                     // but there is no way to distinguish it
@@ -691,7 +731,6 @@ namespace nil {
 
             const llvm::Instruction *handle_instruction(const llvm::Instruction *inst) {
                 log.log_instruction(inst);
-                llvm::outs() << *inst << "\n";
                 stack_frame<var> &frame = call_stack.top();
                 auto &variables = frame.scalars;
                 std::uint32_t start_row = assignmnt.allocated_rows();
@@ -1279,6 +1318,16 @@ namespace nil {
 
                             handle_fixedpoint_addition_component<BlueprintFieldType, ArithmetizationParams>(
                                        inst, frame, bp, assignmnt, start_row);
+                            const var &lhs = variables[inst->getOperand(0)];
+                            const var &rhs = variables[inst->getOperand(1)];
+
+                            components::FixedPoint<BlueprintFieldType,1,1> test1(var_value(assignmnt, lhs), 16);
+                            components::FixedPoint<BlueprintFieldType,1,1> test2(var_value(assignmnt, rhs), 16);
+                            components::FixedPoint<BlueprintFieldType,1,1> test3(var_value(assignmnt, variables[inst]), 16);
+                           llvm::outs() << "==================\n";
+                           llvm::outs() << *inst << "\n";
+                           std::cout << test1.to_double() << " fadd " << test2.to_double() <<"\n";
+                           std::cout << test3.to_double() << "\n";
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
@@ -1332,6 +1381,10 @@ namespace nil {
                             variables[inst] = handle_f_comparison_component<BlueprintFieldType, ArithmetizationParams>(
                             fcmp_inst->getPredicate(), lhs, rhs, bitness,
                             bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
+                           //llvm::outs() << "==================\n";
+                           //llvm::outs() << *inst << "\n";
+                           //std::cout << var_value(assignmnt, lhs).data << " fcmp " << var_value(assignmnt, rhs).data <<"\n";
+                           //std::cout << var_value(assignmnt, variables[inst]).data << "\n";
                             return inst->getNextNonDebugInstruction();
                          } else {
                              UNREACHABLE("can only fcmp with fixed points");
