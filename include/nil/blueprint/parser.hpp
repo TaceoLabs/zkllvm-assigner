@@ -270,6 +270,14 @@ namespace nil {
 
                 ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val) || llvm::isa<llvm::ConstantFP>(val));
                 if (llvm::isa<llvm::ConstantFP>(val)) {
+                    llvm::ConstantFP* fp_constant = llvm::cast<llvm::ConstantFP>(val);
+                    if (fp_constant->getType()->isZkFixedPointTy()) {
+                        std::cout << "LETS GOOOO" << std::endl;
+                        typename BlueprintFieldType::value_type field_constant = 1;
+                        return value_into_vector<BlueprintFieldType, BlueprintFieldType>(field_constant);
+                    } else {
+                        UNREACHABLE("unsupported floating point constant, only fixed point supported");
+                    }
                     //TACEO_TODO
                     //just return 1 for debugging MNIST
                     typename BlueprintFieldType::value_type field_constant = 1;
@@ -666,10 +674,13 @@ namespace nil {
                 } else if (auto addr = llvm::dyn_cast<llvm::BlockAddress>(c)) {
                     frame.scalars[c] = labels[addr->getBasicBlock()];
                 } else if (auto expr = llvm::dyn_cast<llvm::ConstantFP>(c)) {
-                    //TACEO_TODO
-                    //ALSO HERE STORE 1 FOR DEBUG
-                    assignmnt.public_input(0, public_input_idx) = 1;
-                    frame.scalars[c] = var(0, public_input_idx++, false, var::column_type::public_input);
+                    if (expr->getType()->isZkFixedPointTy()) {
+                        std::cout << "LETS GOOOO" << std::endl;
+                        assignmnt.public_input(0, public_input_idx) = 1;
+                        frame.scalars[c] = var(0, public_input_idx++, false, var::column_type::public_input);
+                    } else {
+                        UNREACHABLE("unsupported floating point constant, only fixed point supported");
+                    }
                 } 
                 else {
                     // The only other known constant is an address of a function in CallInst,
