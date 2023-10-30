@@ -253,11 +253,8 @@ namespace nil {
                     double d;
                     if (float_value.isNegInfinity()) {
                         d = -10000.0;
-                        llvm::outs() << "negative infinity\n";
-                        llvm::outs() << d << "\n";
                     } else if (float_value.isPosInfinity()) {
                         d = DELTA - 1;
-                        llvm::outs() << "positive infinity\n";
                     } else {
                         d = float_value.convertToDouble();
                     }
@@ -550,11 +547,11 @@ namespace nil {
                        handle_fixedpoint_exp_component<BlueprintFieldType, ArithmetizationParams>(
                                    inst, frame, bp, assignmnt, start_row);
                        const var &lhs = frame.scalars[inst->getOperand(0)];
-                       components::FixedPoint<BlueprintFieldType,1,1> test(var_value(assignmnt, lhs), 16);
-                       llvm::outs() << "==================\n";
-                       llvm::outs() << *inst << "\n";
-                       std::cout << "e^" << test.to_double() << "\n";
-                       std::cout << var_value(assignmnt, frame.scalars[inst]).data << "\n";
+                       //components::FixedPoint<BlueprintFieldType,1,1> test(var_value(assignmnt, lhs), 16);
+                      //llvm::outs() << "==================\n";
+                      //llvm::outs() << *inst << "\n";
+                      //std::cout << "e^" << test.to_double() << "\n";
+                      //std::cout << var_value(assignmnt, frame.scalars[inst]).data << "\n";
                        return true;
                     }
                     default:
@@ -1206,10 +1203,17 @@ namespace nil {
                                             //dim.reduce(|a,b| a + b)
                                             // get pointer to tensor data
                                             ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr));
-                                            ptr_type _aligned_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr+1));
+                                            ptr_type _shape_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr + 3));
+                                            unsigned _rank = resolve_number<unsigned>(stack_memory.load(_struct_ptr + 5));
+                                            unsigned size = 1;
+                                            for (unsigned i = 0;i<_rank;++i) {
+                                                size *= resolve_number<unsigned>(stack_memory.load(_shape_ptr + i));
+                                            }
                                             std::cout << "[";
-                                            for (unsigned j=0;j<10;++j) {
-                                                std::cout << var_value(assignmnt, stack_memory.load(_data_ptr + j)).data << ", ";
+                                            for (unsigned j=0;j<size;++j) {
+                                                typename BlueprintFieldType::value_type field = var_value(assignmnt, stack_memory.load(_data_ptr + j)).data;
+                                                components::FixedPoint<BlueprintFieldType,1,1> out(field, 16);
+                                                std::cout << out.to_double() << ", ";
                                             }
                                             std::cout << "]" << std::endl;
                                         }
@@ -1265,20 +1269,11 @@ namespace nil {
                                         if (field_arg_num<BlueprintFieldType>(ret_val->getType()) > 1) {
                                             UNREACHABLE("not possible at the moment (maybe later?)");
                                         }
-                                        //auto test = var_value(assignmnt, extracted_frame.scalars[ret_val]).data;
                                         //TACEO_TODO This is copied from Roman's helper
                                         //TACEO_TODO remove this as soon as we have seperate lib
-                                        typename BlueprintFieldType::value_type P_HALF = BlueprintFieldType::modulus / 2;
                                         typename BlueprintFieldType::value_type field = var_value(assignmnt, extracted_frame.scalars[ret_val]).data;
-                                        bool is_negative = field > P_HALF;
-                                        if (is_negative) {
-                                            field = -field;
-                                            std::cout << "-";
-                                        }
-                                        //we cannot use llvm::outs here
-                                        std::cout << field << std::endl;
-                                        std::cout << "^_________________________________" << std::endl;
-                                        std::cout << "at the moment you have to divide | this number with 65536 (2^16) to get the result" << std::endl;
+                                        components::FixedPoint<BlueprintFieldType,1,1> out(field, 16);
+                                        std::cout << out.to_double() << std::endl;
                                     }
                                     else {
                                         std::cout << var_value(assignmnt, extracted_frame.scalars[ret_val]).data << std::endl;
@@ -1324,10 +1319,10 @@ namespace nil {
                             components::FixedPoint<BlueprintFieldType,1,1> test1(var_value(assignmnt, lhs), 16);
                             components::FixedPoint<BlueprintFieldType,1,1> test2(var_value(assignmnt, rhs), 16);
                             components::FixedPoint<BlueprintFieldType,1,1> test3(var_value(assignmnt, variables[inst]), 16);
-                           llvm::outs() << "==================\n";
-                           llvm::outs() << *inst << "\n";
-                           std::cout << test1.to_double() << " fadd " << test2.to_double() <<"\n";
-                           std::cout << test3.to_double() << "\n";
+                          //llvm::outs() << "==================\n";
+                          //llvm::outs() << *inst << "\n";
+                          //std::cout << test1.to_double() << " fadd " << test2.to_double() <<"\n";
+                          //std::cout << test3.to_double() << "\n";
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
