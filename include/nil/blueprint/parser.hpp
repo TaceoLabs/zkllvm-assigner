@@ -1192,8 +1192,6 @@ namespace nil {
                                         for (unsigned i=0;i<size;++i) {
                                             //get pointer to tensor struct 
                                             ptr_type _struct_ptr = resolve_number<ptr_type>(stack_memory.load(_omts + (i * 8)));
-                                            //TACEO_TODO for now only iterate over 10 -> we need to iterate over data size which is
-                                            //dim.reduce(|a,b| a + b)
                                             // get pointer to tensor data
                                             ptr_type _data_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr));
                                             ptr_type _shape_ptr = resolve_number<ptr_type>(stack_memory.load(_struct_ptr + 3));
@@ -1209,6 +1207,7 @@ namespace nil {
                                                 std::cout << out.to_double() << ", ";
                                             }
                                             std::cout << "]" << std::endl;
+                                            std::cout << "circuit size: " << assignmnt.rows_amount() << std::endl;
                                         }
 
                                     } else if (ret_val->getType()->isVectorTy()) {
