@@ -60,13 +60,11 @@ namespace nil {
 
                         var handle_om_tensor_get_data_ptr(om_tensor_ptr_type& om_tensor_ptr) {
                             ptr_type aligned_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(om_tensor_ptr.data) + 1;
-                            ptr_type test_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(var_value(*assignmnt, memory->load(aligned_ptr)).data);
                             return memory->load(aligned_ptr);
                         }
 
                         var handle_om_tensor_get_shape(om_tensor_ptr_type& om_tensor_ptr) {
                             ptr_type shape_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(om_tensor_ptr.data) + 3;
-                            ptr_type test_ptr = (ptr_type)static_cast<typename BlueprintFieldType::integral_type>(var_value(*assignmnt, memory->load(shape_ptr)).data);
                             return memory->load(shape_ptr);
                         }
 
@@ -91,8 +89,10 @@ namespace nil {
 
                         var handle_om_tensor_create_untyped(const llvm::CallInst* inst, stack_frame<var>& frame, om_tensor_ptr_type& om_tensor_ptr) {
                             var val_ptr;
-                            ptr_type ptr = create_empty_om_tensor(val_ptr); 
-                            memory->store(ptr + 5, frame.scalars[inst->getOperand(0)]);
+                            auto rank_var = frame.scalars[inst->getOperand(0)];
+                            unsigned number = (unsigned)static_cast<typename BlueprintFieldType::integral_type>(var_value(*assignmnt, rank_var).data);
+                            ptr_type ptr = create_empty_om_tensor(val_ptr, number); 
+                            memory->store(ptr + 5, rank_var);
                             return val_ptr;
                         }
 
@@ -149,10 +149,16 @@ namespace nil {
                             return val_ptr;
                         }
 
-                        inline ptr_type create_empty_om_tensor(var& var_ptr) {
+                        inline ptr_type create_empty_om_tensor(var& var_ptr, unsigned _rank) {
                             ptr_type ptr = memory->malloc(om_tensor_size);
+                            //TACEO_TODO do we need to put this into public input???
                             assignmnt->public_input(0,*public_input_idx) = ptr;
                             var_ptr = var(0, (*public_input_idx)++, false, var::column_type::public_input);
+
+                            assignmnt->public_input(0,*public_input_idx) = memory->malloc(_rank);
+                            memory->store(ptr + 3, var(0, (*public_input_idx)++, false, var::column_type::public_input));
+                            assignmnt->public_input(0,*public_input_idx) = memory->malloc(_rank);
+                            memory->store(ptr + 4, var(0, (*public_input_idx)++, false, var::column_type::public_input));
                             return ptr;
                         }
 
