@@ -635,6 +635,22 @@ namespace nil {
                 frame.scalars[inst] = put_into_assignment(offset);
             }
 
+            // void handle_constant_gep(const llvm::GetElementPtrInst* gep, stack_frame<var> &frame) {
+            //     llvm::Type *gep_ty = gep->getSourceElementType();
+            //     typename BlueprintFieldType::value_type ptr =
+            //         gep->getPointerOperand();
+
+            //     var gep_initial_idx = resolve_number<var>(frame, gep->getOperand(1));
+            //     size_t cells_for_type = layout_resolver->get_type_layout<BlueprintFieldType>(gep_ty).size();
+            //     auto initial_ptr_adjustment = cells_for_type * var_value(assignmnt, gep_initial_idx);
+            //     ptr += initial_ptr_adjustment;
+
+            //     if (gep->getNumIndices() > 1) {
+            //         UNREACHABLE("unsupported floating point constant, only fixed point supported");
+            //     }
+            //     frame.scalars[gep] = put_into_assignment(ptr);
+            // }
+
             void put_constant(llvm::Constant *c, stack_frame<var> &frame) {
                 if (llvm::isa<llvm::ConstantField>(c) || llvm::isa<llvm::ConstantInt>(c)) {
                     std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = marshal_field_val(c);
@@ -708,6 +724,33 @@ namespace nil {
                     case llvm::Instruction::PtrToInt:
                         handle_ptrtoint(expr, expr->getOperand(0), frame);
                         break;
+                    case llvm::Instruction::GetElementPtr: {
+                        // TODO: this is copy-pasted from the handle_gep function, deduplicate later
+                        llvm::Type *gep_ty = expr->getType();
+                        typename BlueprintFieldType::value_type ptr =
+                            var_value(assignmnt, frame.scalars[expr->getOperand(0)]);
+
+                        var gep_initial_idx = frame.scalars[expr->getOperand(1)];
+                        size_t cells_for_type = layout_resolver->get_type_layout<BlueprintFieldType>(gep_ty).size();
+                        auto initial_ptr_adjustment = cells_for_type * var_value(assignmnt, gep_initial_idx);
+                        ptr += initial_ptr_adjustment;
+
+                        if (expr->getNumOperands() != 2) {
+                            UNREACHABLE("Unsupported constant expression GEP with multiple indices");
+                        }
+
+                        if (ptr == 0) {
+                            UNREACHABLE("Incorrect GEP result");
+                        }
+                        frame.scalars[c] = put_into_assignment(ptr);
+                        break;
+                    }
+                    case llvm::Instruction::Add: {
+                        typename BlueprintFieldType::value_type lhs = var_value(assignmnt, frame.scalars[expr->getOperand(0)]);
+                        typename BlueprintFieldType::value_type rhs = var_value(assignmnt, frame.scalars[expr->getOperand(1)]);
+                        frame.scalars[c] = put_into_assignment(lhs + rhs);
+                        break;
+                    }
                     default:
                         UNREACHABLE(std::string("Unhandled constant expression: ") + expr->getOpcodeName());
                     }
