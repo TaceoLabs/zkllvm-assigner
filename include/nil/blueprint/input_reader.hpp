@@ -367,6 +367,7 @@ namespace nil {
                 assignmnt.public_input(0, public_input_idx) = stride_ptr;
                 var_stride_ptr = var(0, public_input_idx++, false, var::column_type::public_input);
                 unsigned stride = 1;
+                std::vector<unsigned> strides;
                 for (size_t i = 0; i < dim_arr.size(); ++i) {
                     if (dim_arr[i].kind() != boost::json::kind::int64 || dim_arr[i].as_int64() <= 0) {
                         llvm::errs() << "expect unsigned ints for tensor dimensions >0\n";
@@ -375,9 +376,11 @@ namespace nil {
                     //dimension
                     assignmnt.public_input(0, public_input_idx) = dim_arr[i].as_int64(); 
                     memory.store(dim_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
-
-                    //stride //WE MAYBE NEED TO SWAP THIS!
                     stride *= dim_arr[i].as_int64(); 
+                    strides.emplace_back(stride);
+                }
+                std::reverse(std::begin(strides), std::end(strides));
+                for (auto stride : strides) {
                     assignmnt.public_input(0, public_input_idx) = stride; 
                     memory.store(stride_ptr++, var(0, public_input_idx++, false, var::column_type::public_input));
                 }
