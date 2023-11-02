@@ -251,6 +251,8 @@ namespace nil {
                     auto float_value = val->getValue();
                     ASSERT(&float_value.getSemantics() == &llvm::APFloat::IEEEdouble());
                     double d;
+                    //TACEO_TODO This should be a call to our future fixed point library 
+                    //-inf and +inf depend on #limbs
                     if (float_value.isNegInfinity()) {
                         d = -10000.0;
                     } else if (float_value.isPosInfinity()) {
@@ -1305,12 +1307,6 @@ namespace nil {
 
                             handle_fixedpoint_addition_component<BlueprintFieldType, ArithmetizationParams>(
                                        inst, frame, bp, assignmnt, start_row);
-                            const var &lhs = variables[inst->getOperand(0)];
-                            const var &rhs = variables[inst->getOperand(1)];
-
-                            components::FixedPoint<BlueprintFieldType,1,1> test1(var_value(assignmnt, lhs), 16);
-                            components::FixedPoint<BlueprintFieldType,1,1> test2(var_value(assignmnt, rhs), 16);
-                            components::FixedPoint<BlueprintFieldType,1,1> test3(var_value(assignmnt, variables[inst]), 16);
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
