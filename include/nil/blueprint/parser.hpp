@@ -367,8 +367,7 @@ namespace nil {
             template<typename VarType>
             ptr_type store_constant(const llvm::Constant *constant_init) {
                 if (llvm::isa<llvm::ConstantFP>(constant_init)) {
-                    std::cout << "uwu\n";
-                    exit(0);
+                    UNREACHABLE("TACEO_TODO floating point constant in store_constant not supported at the moment");
                 }
                 if (auto operation = llvm::dyn_cast<llvm::ConstantExpr>(constant_init)) {
                     if (operation->isCast())
@@ -546,12 +545,6 @@ namespace nil {
                        //ASSERT(inst->getOperand(1)->getType()->isZkFixedPointTy());
                        handle_fixedpoint_exp_component<BlueprintFieldType, ArithmetizationParams>(
                                    inst, frame, bp, assignmnt, start_row);
-                       const var &lhs = frame.scalars[inst->getOperand(0)];
-                       //components::FixedPoint<BlueprintFieldType,1,1> test(var_value(assignmnt, lhs), 16);
-                      //llvm::outs() << "==================\n";
-                      //llvm::outs() << *inst << "\n";
-                      //std::cout << "e^" << test.to_double() << "\n";
-                      //std::cout << var_value(assignmnt, frame.scalars[inst]).data << "\n";
                        return true;
                     }
                     default:
@@ -1319,10 +1312,6 @@ namespace nil {
                             components::FixedPoint<BlueprintFieldType,1,1> test1(var_value(assignmnt, lhs), 16);
                             components::FixedPoint<BlueprintFieldType,1,1> test2(var_value(assignmnt, rhs), 16);
                             components::FixedPoint<BlueprintFieldType,1,1> test3(var_value(assignmnt, variables[inst]), 16);
-                          //llvm::outs() << "==================\n";
-                          //llvm::outs() << *inst << "\n";
-                          //std::cout << test1.to_double() << " fadd " << test2.to_double() <<"\n";
-                          //std::cout << test3.to_double() << "\n";
                             return inst->getNextNonDebugInstruction();
                         } else {
                             UNREACHABLE("can only fadd with fixed points");
@@ -1376,10 +1365,6 @@ namespace nil {
                             variables[inst] = handle_f_comparison_component<BlueprintFieldType, ArithmetizationParams>(
                             fcmp_inst->getPredicate(), lhs, rhs, bitness,
                             bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
-                           //llvm::outs() << "==================\n";
-                           //llvm::outs() << *inst << "\n";
-                           //std::cout << var_value(assignmnt, lhs).data << " fcmp " << var_value(assignmnt, rhs).data <<"\n";
-                           //std::cout << var_value(assignmnt, variables[inst]).data << "\n";
                             return inst->getNextNonDebugInstruction();
                          } else {
                              UNREACHABLE("can only fcmp with fixed points");
