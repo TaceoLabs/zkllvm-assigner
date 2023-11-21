@@ -26,6 +26,7 @@
 #ifndef CRYPTO3_BLUEPRINT_COMPONENT_INSTRUCTION_PARSER_HPP
 #define CRYPTO3_BLUEPRINT_COMPONENT_INSTRUCTION_PARSER_HPP
 
+#include "llvm/ZK/ZKEnums.h"
 #define PRINT_VEC(X) {                   \
         std::cout << "[";                \
         for (auto i : X) {               \
@@ -247,9 +248,10 @@ namespace nil {
             }
 
             template<typename FieldType>
-                std::vector<typename BlueprintFieldType::value_type> field_dependent_marshal_fixedpoint(const llvm::ConstantFP* val) {
-                    auto float_value = val->getValue();
-                    ASSERT(&float_value.getSemantics() == &llvm::APFloat::IEEEdouble());
+                std::vector<typename BlueprintFieldType::value_type> field_dependent_marshal_fixedpoint(const llvm::ConstantZkFixedPoint* ZkFixedPoint) {
+                    auto float_value = ZkFixedPoint->getValue().getValueAPF();
+                    ASSERT(&float_value.getSemantics() == &llvm::APFloat::IEEEdouble() && "Fixed point constant must be double");
+                    ASSERT(ZkFixedPoint->getValue().getKind() == llvm::ZkFixedPointKind::ZK_FIXED_POINT_16_16 && "only fixedpoint 1616 supported at the moment");
                     double d;
                     //TACEO_TODO This should be a call to our future fixed point library 
                     //-inf and +inf depend on #limbs
@@ -294,19 +296,13 @@ namespace nil {
             }
 
             std::vector<typename BlueprintFieldType::value_type> marshal_field_val(const llvm::Value *val) {
-
-                ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val) || llvm::isa<llvm::ConstantFP>(val));
-                if (llvm::isa<llvm::ConstantFP>(val)) {
-                    const llvm::ConstantFP* fp_constant = llvm::cast<llvm::ConstantFP>(val);
-                    if (fp_constant->getType()->isZkFixedPointTy()) {
-                        return field_dependent_marshal_fixedpoint<BlueprintFieldType>(fp_constant);
-                    } else {
-                        UNREACHABLE("unsupported floating point constant, only fixed point supported");
-                    }
-                }
-                else if (llvm::isa<llvm::ConstantInt>(val)) {
+                ASSERT(llvm::isa<llvm::ConstantField>(val) || llvm::isa<llvm::ConstantInt>(val) || llvm::isa<llvm::ConstantZkFixedPoint>(val));
+                if (llvm::isa<llvm::ConstantInt>(val)) {
                     return field_dependent_marshal_val<BlueprintFieldType>(val);
-                } else {
+                } else if (auto* ZkFixedPoint = llvm::dyn_cast<llvm::ConstantZkFixedPoint>(val)) {
+                  return field_dependent_marshal_fixedpoint<BlueprintFieldType>(ZkFixedPoint);
+                }
+                else {
                     switch (llvm::cast<llvm::GaloisFieldType>(val->getType())->getFieldKind()) {
                         case llvm::GALOIS_FIELD_CURVE25519_BASE: {
                             using operating_field_type = typename nil::crypto3::algebra::curves::ed25519::base_field_type;
@@ -368,9 +364,6 @@ namespace nil {
 
             template<typename VarType>
             ptr_type store_constant(const llvm::Constant *constant_init) {
-                if (llvm::isa<llvm::ConstantFP>(constant_init)) {
-                    UNREACHABLE("TACEO_TODO floating point constant in store_constant not supported at the moment");
-                }
                 if (auto operation = llvm::dyn_cast<llvm::ConstantExpr>(constant_init)) {
                     if (operation->isCast())
                         constant_init = operation->getOperand(0);
@@ -648,21 +641,16 @@ namespace nil {
                         }
                     }
                     //TACEO_TODO maybe write macro to deduplicate code
-                } else if (llvm::isa<llvm::ConstantFP>(c)) {
-                    const llvm::ConstantFP* fp_constant = llvm::cast<llvm::ConstantFP>(c);
-                    if (fp_constant->getType()->isZkFixedPointTy()) {
-                        std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = field_dependent_marshal_fixedpoint<BlueprintFieldType>(fp_constant);
-                        if (marshalled_field_val.size() == 1) {
-                            frame.scalars[c] = put_into_assignment(marshalled_field_val[0]);
+                } else if (auto *Fixed  = llvm::dyn_cast<llvm::ConstantZkFixedPoint>(c)) {
+                    std::vector<typename BlueprintFieldType::value_type> marshalled_field_val = field_dependent_marshal_fixedpoint<BlueprintFieldType>(Fixed);
+                    if (marshalled_field_val.size() == 1) {
+                        frame.scalars[c] = put_into_assignment(marshalled_field_val[0]);
+                    }
+                    else {
+                        frame.vectors[c] = {};
+                        for (std::size_t i = 0; i < marshalled_field_val.size(); i++) {
+                            frame.vectors[c].push_back(put_into_assignment(marshalled_field_val[i]));
                         }
-                        else {
-                            frame.vectors[c] = {};
-                            for (std::size_t i = 0; i < marshalled_field_val.size(); i++) {
-                                frame.vectors[c].push_back(put_into_assignment(marshalled_field_val[i]));
-                            }
-                        }
-                    } else {
-                        UNREACHABLE("unsupported floating point constant, only fixed point supported");
                     }
                 } else if (llvm::isa<llvm::UndefValue>(c)) {
                     llvm::Type *undef_type = c->getType();
