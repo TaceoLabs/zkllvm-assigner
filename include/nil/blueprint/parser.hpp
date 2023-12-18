@@ -134,6 +134,7 @@ namespace nil {
                 const var &lhs = variables[inst->getOperand(0)];
                 const var &rhs = variables[inst->getOperand(1)];
 
+
                 llvm::CmpInst::Predicate p = inst->getPredicate();
 
                 if (p == llvm::CmpInst::ICMP_EQ || p ==llvm::CmpInst::ICMP_NE) {
@@ -142,27 +143,37 @@ namespace nil {
                         p, lhs, rhs, bitness,
                         bp, assignmnt, assignmnt.allocated_rows(), public_input_idx);
                 } else {
+                    auto P_HALF = BlueprintFieldType::modulus / 2; 
+                    bool leftNegative = var_value(assignmnt, lhs) > P_HALF;
+                    bool rightNegative = var_value(assignmnt, rhs) > P_HALF;
                     bool res;
-
                     switch (p) {
                     case llvm::CmpInst::ICMP_SGE:
                     case llvm::CmpInst::ICMP_UGE:{
                         res = (var_value(assignmnt, lhs) >= var_value(assignmnt, rhs));
+                        res ^= leftNegative;
+                        res ^= rightNegative;
                         break;
                     }
                     case llvm::CmpInst::ICMP_SGT:
                     case llvm::CmpInst::ICMP_UGT:{
                         res = (var_value(assignmnt, lhs) > var_value(assignmnt, rhs));
+                        res ^= leftNegative;
+                        res ^= rightNegative;
                         break;
                     }
                     case llvm::CmpInst::ICMP_SLE:
                     case llvm::CmpInst::ICMP_ULE:{
                         res = (var_value(assignmnt, lhs) <= var_value(assignmnt, rhs));
+                        res ^= leftNegative;
+                        res ^= rightNegative;
                         break;
                     }
                     case llvm::CmpInst::ICMP_SLT:
                     case llvm::CmpInst::ICMP_ULT:{
                         res = (var_value(assignmnt, lhs) < var_value(assignmnt, rhs));
+                        res ^= leftNegative;
+                        res ^= rightNegative;
                         break;
                     }
                     default:
